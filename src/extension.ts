@@ -228,6 +228,7 @@ async function activateInner(
   // idle monitor above, which is the only other source of a "run finished" signal.
   void HookSignals.ensureDirectory();
   const signals = new HookSignals(logger);
+  cards.signals = signals;
   // Assigned once the session monitor below exists. A hook signal can only arrive from a
   // file watcher, so never during activation — but relying on that from fifty lines away is
   // not something a later edit should have to know.
@@ -244,12 +245,14 @@ async function activateInner(
       range.invalidate(false);
     }),
     signals.onDidStartRun(() => {
-      // A new request: the boundary really has moved.
+      // A new request: the boundary really has moved, and the panel should say so at once.
       range.invalidateBase();
+      void cards.postSession();
     }),
     signals.onDidEndRun(() => {
       signalCounts.ended++;
       range.invalidateBase();
+      void cards.postSession();
       void (async () => {
         const target = await resolveTarget(context, logger, { interactive: false });
         if (target) await batch.onExternalRunFinished(target, 'hook');

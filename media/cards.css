@@ -537,3 +537,12 @@ h3 {
 .actions button.go:hover {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
+
+/* sent, and the agent has not answered yet */
+.card.awaiting {
+  border-left-color: var(--vscode-charts-blue);
+}
+.card.awaiting .status {
+  color: var(--vscode-charts-blue);
+  opacity: 1;
+}

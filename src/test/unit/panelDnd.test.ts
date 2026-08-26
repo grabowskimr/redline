@@ -256,6 +256,33 @@ describe('panel drag & drop', () => {
   });
 });
 
+describe('card state', () => {
+  /** The rules the card renders by; getting these wrong makes a live note look finished. */
+  const settled = (n: { done?: boolean; sent?: { outcome?: string }; pendingReply?: boolean }): boolean =>
+    !!(n.done || (n.sent && n.sent.outcome)) && !n.pendingReply;
+  const dimmed = (n: { done?: boolean; sent?: { outcome?: string }; pendingReply?: boolean }): boolean =>
+    !!n.done && !n.pendingReply;
+
+  it('a finished note is collapsed and dimmed', () => {
+    const n = { done: true, sent: { outcome: 'done' } };
+    assert.equal(settled(n), true);
+    assert.equal(dimmed(n), true);
+  });
+
+  it('an unsent reply makes a finished note live again, and not greyed out', () => {
+    // The reported bug: replying from the comment widget left the card looking disabled.
+    const n = { done: true, sent: { outcome: 'done' }, pendingReply: true };
+    assert.equal(settled(n), false, 'expanded, with its actions back');
+    assert.equal(dimmed(n), false, 'and not wearing the done styling');
+  });
+
+  it('a note waiting on Claude is neither settled nor dimmed', () => {
+    const n = { sent: {} };
+    assert.equal(settled(n), false);
+    assert.equal(dimmed(n), false);
+  });
+});
+
 describe('panel busy feedback', () => {
   /**
    * Finding the Claude session shells out to `ps` and the Orca CLI, so a click has a

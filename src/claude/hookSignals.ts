@@ -19,6 +19,8 @@ import { Logger } from '../logger';
 const TOUCH_DEBOUNCE_MS = 500;
 /** Repeat end-of-run signals inside this window are the same run. */
 const END_RUN_QUIET_MS = 5_000;
+/** A run believed to be in flight for longer than this has lost its end signal. */
+const MAX_RUN_MS = 30 * 60_000;
 
 export class HookSignals implements vscode.Disposable {
   private readonly _onDidTouch = new vscode.EventEmitter<void>();
@@ -36,6 +38,8 @@ export class HookSignals implements vscode.Disposable {
   private readonly subs: vscode.Disposable[] = [];
   private touchTimer: NodeJS.Timeout | undefined;
   private lastEndRun = 0;
+  private runStartedAt = 0;
+  private runEndedAt = 0;
 
   constructor(logger: Logger) {
     const dir = HookSignals.directory();
@@ -58,12 +62,14 @@ export class HookSignals implements vscode.Disposable {
           const now = Date.now();
           if (now - this.lastEndRun < END_RUN_QUIET_MS) return;
           this.lastEndRun = now;
+          this.runEndedAt = now;
           this._onDidEndRun.fire();
           return;
         }
         // The snapshot manifest is written as a request is submitted: the run boundary has
         // moved, which is the only thing that makes re-reading the transcript worthwhile.
         if (name === 'manifest.json') {
+          this.runStartedAt = Date.now();
           this._onDidStartRun.fire();
           return;
         }
@@ -81,6 +87,19 @@ export class HookSignals implements vscode.Disposable {
     } catch (err) {
       logger.warn('could not watch for hook signals', err);
     }
+  }
+
+  /**
+   * Whether the agent is working on something right now.
+   *
+   * Derived from the hook's own markers — a request was submitted and has not stopped — so
+   * it holds in a plain terminal, where the Orca idle monitor cannot see anything at all.
+   * A run that never reports its end is not believed indefinitely: without that, one missed
+   * `Stop` would leave the panel claiming Claude is busy forever.
+   */
+  get running(): boolean {
+    if (this.runStartedAt === 0 || this.runEndedAt >= this.runStartedAt) return false;
+    return Date.now() - this.runStartedAt < MAX_RUN_MS;
   }
 
   static directory(home = os.homedir()): string {

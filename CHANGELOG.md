@@ -23,6 +23,19 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: **the comment widget had no reply box.** `canReply` was off — correct while replying
+  created a second note on the same line, wrong once it adds a turn — so the only route to a
+  reply was the `⋯` menu, where nobody would find it. The widget now has a reply field, and a
+  note with an unsent reply no longer takes the resolved styling.
+- Fixed: a card replied to from the widget kept the dimmed "done" look. The dimming means
+  "nothing to do here", and a reply waiting to be sent is something to do.
+- Added: a note sent to Claude shows **waiting for Claude** with a spinner until it reports
+  back, and the session strip shows the agent as working from the hook's own markers — so it
+  works in a plain terminal, where the Orca idle monitor sees nothing.
+- Removed: **⇩ apply report** from the panel. The report is applied automatically when a run
+  ends, so the button did nothing that had not already happened. **✓ clear sent** stays.
+- Removed: **✍ revise** from cards. It was a reply by another name; the ↳ reply action does the
+  same thing and is now the only one.
 - Fixed: the "Claude finished" notification appeared twice, a few seconds apart. Two channels
   report a finish, and the Orca idle monitor confirms one about ten seconds after the agent
   goes idle — landing exactly on the ten-second guard meant to stop this. Widening the guard

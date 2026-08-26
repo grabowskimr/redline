@@ -214,6 +214,8 @@
       : '';
     const status = n.pendingReply
       ? '✎ reply not sent'
+      : n.awaiting
+      ? '<span class="codicon codicon-loading codicon-modifier-spin"></span> waiting for Claude'
       : n.sent
       ? statusOf(n)
       : n.done
@@ -228,9 +230,10 @@
 
     return (
       '<div class="card' +
-      (n.done ? ' done' : '') +
+      (n.done && !n.pendingReply ? ' done' : '') +
       (settled ? ' settled' : '') +
       (n.pendingReply ? ' pending' : '') +
+      (n.awaiting ? ' awaiting' : '') +
       '" data-id="' +
       esc(n.id) +
       '" data-kind="' +
@@ -277,7 +280,6 @@
             '📎',
             'Attach a screenshot: click to pick a file, paste with ⌘V, or hold ⇧ while dragging an image onto this card',
           ) +
-          (n.sent ? btn('revise', '✍', 'Revise — the change is not what you meant') : '') +
           btn('done', '✓', 'Mark done')) +
       (!n.sent || n.pendingReply
         ? btn(
@@ -399,8 +401,7 @@
       html += '<h3>Sent to Claude — ' + addressed + '/' + state.sent.length + ' addressed</h3>';
       html +=
         '<div class="sentbar">' +
-        '<button data-global="redline.applyReport" title="Read Claude&#8217;s #n done / skipped / answer lines">⇩ apply report</button>' +
-        '<button data-global="redline.clearSent">✓ clear sent</button>' +
+        '<button data-global="redline.clearSent" title="Archive these and clear the section">✓ clear sent</button>' +
         '</div>';
       html += state.sent.map(card).join('');
     }
@@ -504,9 +505,7 @@
       case 'send':
         cmd('redline.sendSelected', id);
         break;
-      case 'revise':
-        cmd('redline.reviseNote', id);
-        break;
+
       case 'suggest':
         cmd('redline.addSuggestion', id);
         break;

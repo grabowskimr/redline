@@ -19,6 +19,7 @@ import { NoteIndex } from './noteIndex';
 import { resolveAnchor, snippetAt } from '../anchor/anchorService';
 import { uriForNote } from '../comments/uriMapping';
 import { SessionWatcher } from '../claude/sessionWatcher';
+import { HookSignals } from '../claude/hookSignals';
 import { ReviewRange } from '../git/reviewRange';
 import { findTargets, isReachable } from '../claude/claudeSession';
 
@@ -49,6 +50,8 @@ interface CardData {
   sent?: { outcome?: string; reply?: string; changed: boolean };
   /** A reply is written but not sent: the card stays active and offers ➤. */
   pendingReply?: boolean;
+  /** Sent, and Claude has not reported on it yet. */
+  awaiting?: boolean;
   /** Current code at the note's location when it differs from `snippet`. */
   after?: string;
 }
@@ -103,6 +106,8 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   /** Wired after construction (these depend on the store/host being built first). */
   attachments: Attachments | undefined;
+  /** Set after construction; the hook signals say whether a run is in flight. */
+  signals: HookSignals | undefined;
   watcher: SessionWatcher | undefined;
   range: ReviewRange | undefined;
 
@@ -189,7 +194,7 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   async postSession(): Promise<void> {
     const view = this.view;
     if (!view?.visible) return;
-    let info: SessionInfo = { label: this.lastSessionLabel, state: this.watcher?.state ?? 'off' };
+    let info: SessionInfo = { label: this.lastSessionLabel, state: this.sessionState() };
     try {
       info = await this.sessionInfo();
     } catch (err) {
@@ -211,7 +216,7 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (label) this.lastSessionLabel = label;
     const info: SessionInfo = {
       label: label || this.lastSessionLabel,
-      state: this.watcher?.state ?? 'off',
+      state: this.sessionState(),
     };
     const summary = await this.range?.summary();
     if (summary) {
@@ -268,6 +273,7 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     };
     if (n.suggestion !== undefined) c.suggestion = n.suggestion;
     if (hasUnsentReply(n)) c.pendingReply = true;
+    else if (n.sent && !n.sent.outcome) c.awaiting = true;
     if (n.sent) {
       const changed = this.index.changedSinceSent(n.id);
       c.sent = { changed };
@@ -401,6 +407,15 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
    * to) the pointer; when it cannot — the drop landed on an empty panel — fall back to the
    * only note, or ask.
    */
+  /**
+   * Whether to show the session as working. The hook knows first and knows anywhere; the
+   * idle monitor is the fallback and only sees Orca terminals.
+   */
+  private sessionState(): SessionInfo['state'] {
+    if (this.signals?.running) return 'working';
+    return this.watcher?.state ?? 'off';
+  }
+
   private async resolveAttachTarget(id: string | undefined): Promise<string | undefined> {
     if (id && this.store.getById(id)) return id;
     const candidates = this.index.panelNotes();

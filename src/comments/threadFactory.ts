@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { firstLine, KIND_META, ReviewNote, SerialRange } from '../model/note';
+import { firstLine, hasUnsentReply, KIND_META, ReviewNote, SerialRange } from '../model/note';
 import { NoteComment, THREAD_CONTEXT } from './noteComment';
 
 export function toRange(r: SerialRange): vscode.Range {
@@ -19,14 +19,14 @@ export function applyNoteToThread(thread: vscode.CommentThread, note: ReviewNote
   // be an emoji — and the widget already shows the kind's codicon next to the author.
   const kind = note.kind === 'comment' ? 'note' : KIND_META[note.kind].label;
   thread.label = `#${note.seq} · ${kind} · ${firstLine(note.body, 48)}`;
-  // Done notes take the resolved styling; open ones keep the accent border.
-  thread.state = note.done || note.sent?.outcome === 'done'
-    ? vscode.CommentThreadState.Resolved
-    : vscode.CommentThreadState.Unresolved;
+  // Resolved styling for a finished note — unless there is a reply waiting to be sent, in
+  // which case the conversation is live again and it should not look closed.
+  const finished = (note.done || note.sent?.outcome === 'done') && !hasUnsentReply(note);
+  thread.state = finished ? vscode.CommentThreadState.Resolved : vscode.CommentThreadState.Unresolved;
   thread.contextValue = THREAD_CONTEXT;
-  // No reply box once the note has been sent or parked — nothing more to add there.
-  // Follow-ups come from the panel or the thread menu; the native reply field stays off.
-  thread.canReply = false;
+  // The reply box is the conversation. It was off while replying created a second note on
+  // the same line; now it adds a turn to this one, which is the whole point of it.
+  thread.canReply = true;
   const r = toRange(note.range);
   if (!thread.range || !thread.range.isEqual(r)) thread.range = r;
 }
