@@ -23,6 +23,12 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: the "Claude finished" notification appeared twice, a few seconds apart. Two channels
+  report a finish, and the Orca idle monitor confirms one about ten seconds after the agent
+  goes idle — landing exactly on the ten-second guard meant to stop this. Widening the guard
+  would only move the seam, so while the plugin is reporting finishes the monitor's
+  notification is dropped: the hook fires instantly and works in any terminal, the monitor
+  polls and only works in Orca.
 - Fixed: **a reply went to whichever session happened to be preferred, not the one holding the
   conversation.** Sending a single note ignored the session it had already been sent to, so with
   two sessions open it asked every time — and could drop a reply into a session that had never

@@ -7,10 +7,23 @@ import { latestSessionAmong, recentAssistantText } from '../claude/transcripts';
 import { Deps, resolveNoteIdOrPick } from './deps';
 
 /**
- * A run reported inside this window is the same run. The hook's `Stop` signal and the Orca
- * idle monitor both notice a finish, usually seconds apart.
+ * A run reported inside this window is the same run.
+ *
+ * Not the main defence — the Orca monitor confirms a finish about ten seconds after the
+ * agent goes idle (`BUSY_CONFIRM_MS + FINISH_CONFIRM_MS`), which is exactly where a ten
+ * second guard sits, so a duplicate slipped through by milliseconds. This is now the coarse
+ * backstop; `HOOK_OWNS_REPORTING_MS` is what actually keeps the two channels apart.
  */
-const RUN_REPORT_QUIET_MS = 10_000;
+const RUN_REPORT_QUIET_MS = 20_000;
+
+/**
+ * While the plugin is reporting finishes, the idle monitor is not needed for it.
+ *
+ * The hook fires the moment the agent stops and works in any terminal; the monitor is a
+ * poll that only works in Orca and confirms seconds later. When both are present the hook
+ * owns it, and the monitor's notification is dropped rather than raced.
+ */
+const HOOK_OWNS_REPORTING_MS = 5 * 60_000;
 
 export function batchCommands(deps: Deps) {
   const { store, config, logger, index, range, watcher } = deps;
@@ -275,6 +288,8 @@ export function batchCommands(deps: Deps) {
 
   /** When a run was last reported, so several channels cannot each announce the same one. */
   let lastRunReport = 0;
+  /** When the plugin last reported one, which takes the job off the idle monitor. */
+  let lastHookReport = 0;
 
   /**
    * A run finished. Read the report, mark the notes, and say so exactly once.
@@ -283,13 +298,22 @@ export function batchCommands(deps: Deps) {
    * and a batch we sent ourselves — because more than one of them usually notices the same
    * run and each used to raise its own notification.
    */
-  async function reportRunFinished(target: SessionTarget, external: boolean): Promise<void> {
+  async function reportRunFinished(
+    target: SessionTarget,
+    external: boolean,
+    source: 'hook' | 'monitor' = 'monitor',
+  ): Promise<void> {
     const now = Date.now();
+    if (source === 'monitor' && now - lastHookReport < HOOK_OWNS_REPORTING_MS) {
+      logger.trace('the plugin is reporting finishes here; ignoring the idle monitor');
+      return;
+    }
     if (now - lastRunReport < RUN_REPORT_QUIET_MS) {
       logger.trace('run already reported; skipping duplicate');
       return;
     }
     lastRunReport = now;
+    if (source === 'hook') lastHookReport = now;
 
     // Applied without being asked: the report is the whole point of having sent the notes,
     // and clicking a command to ingest it is a step nobody wants to remember.
@@ -346,8 +370,8 @@ export function batchCommands(deps: Deps) {
     await reportRunFinished(target, false);
   }
 
-  async function onExternalRunFinished(target: SessionTarget): Promise<void> {
-    await reportRunFinished(target, true);
+  async function onExternalRunFinished(target: SessionTarget, source: 'hook' | 'monitor' = 'monitor'): Promise<void> {
+    await reportRunFinished(target, true, source);
   }
 
   async function pickSession(): Promise<void> {

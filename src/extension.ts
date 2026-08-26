@@ -252,7 +252,7 @@ async function activateInner(
       range.invalidateBase();
       void (async () => {
         const target = await resolveTarget(context, logger, { interactive: false });
-        if (target) await batch.onExternalRunFinished(target);
+        if (target) await batch.onExternalRunFinished(target, 'hook');
       })();
     }),
   );
