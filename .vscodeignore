@@ -1,0 +1,17 @@
+.vscode/**
+.vscode-test/**
+src/**
+out/**
+spec/**
+node_modules/**
+.gitignore
+.eslintrc.json
+.prettierrc
+esbuild.js
+tsconfig*.json
+**/*.map
+**/.DS_Store
+test-fixtures/**
+.mocharc.json
+media/jsconfig.json
+docs/**

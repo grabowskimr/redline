@@ -1,0 +1,788 @@
+{
+  "name": "redline",
+  "displayName": "Redline",
+  "description": "Review Claude Code's work — inline notes on the lines that need changes, handed back as one prompt.",
+  "version": "0.2.0",
+  "publisher": "marcin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcin/redline"
+  },
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers",
+    "Notebooks"
+  ],
+  "keywords": [
+    "redline",
+    "code review",
+    "claude code",
+    "review",
+    "comments",
+    "annotations",
+    "claude",
+    "ai",
+    "notes"
+  ],
+  "icon": "resources/icon.png",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Git context is unavailable in virtual workspaces."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "redline.createNote",
+        "title": "Add note  ⌘⏎",
+        "category": "Redline",
+        "icon": "$(add)"
+      },
+      {
+        "command": "redline.quickAddNote",
+        "title": "Add Note at Cursor",
+        "category": "Redline"
+      },
+      {
+        "command": "redline.editComment",
+        "title": "Edit",
+        "category": "Redline",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "redline.saveComment",
+        "title": "Save",
+        "category": "Redline",
+        "icon": "$(check)"
+      },
+      {
+        "command": "redline.cancelEdit",
+        "title": "Cancel",
+        "category": "Redline",
+        "icon": "$(close)"
+      },
+      {
+        "command": "redline.cancelReply",
+        "title": "Close Follow-up Box",
+        "category": "Redline"
+      },
+      {
+        "command": "redline.addFollowUp",
+        "title": "Add Follow-up…",
+        "category": "Redline",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "redline.deleteNote",
+        "title": "Delete Note",
+        "category": "Redline",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "redline.setKind",
+        "title": "Set Kind…",
+        "category": "Redline",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "redline.kindChange",
+        "title": "Mark as Change Request (the default)",
+        "category": "Redline",
+        "icon": "$(request-changes)"
+      },
+      {
+        "command": "redline.kindBug",
+        "title": "Mark as Bug (something is wrong)",
+        "category": "Redline",
+        "icon": "$(bug)"
+      },
+      {
+        "command": "redline.kindSecurity",
+        "title": "Mark as Security issue",
+        "category": "Redline",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "redline.kindPerf",
+        "title": "Mark as Performance issue",
+        "category": "Redline",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "redline.kindIdea",
+        "title": "Mark as Idea (improve / extend this)",
+        "category": "Redline",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "redline.kindRefactor",
+        "title": "Mark as Refactor (same behaviour, better structure)",
+        "category": "Redline",
+        "icon": "$(wrench)"
+      },
+      {
+        "command": "redline.kindQuestion",
+        "title": "Mark as Question (explain before changing)",
+        "category": "Redline",
+        "icon": "$(question)"
+      },
+      {
+        "command": "redline.kindTodo",
+        "title": "Mark as Todo (follow-up work)",
+        "category": "Redline",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "redline.kindNit",
+        "title": "Mark as Nit (tiny style thing)",
+        "category": "Redline",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "redline.kindPraise",
+        "title": "Mark as Praise (no action)",
+        "category": "Redline",
+        "icon": "$(heart)"
+      },
+      {
+        "command": "redline.addSuggestion",
+        "title": "Add Suggested Change…",
+        "category": "Redline",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "redline.applySuggestion",
+        "title": "Apply Suggested Change Locally",
+        "category": "Redline",
+        "icon": "$(check)"
+      },
+      {
+        "command": "redline.toggleDone",
+        "title": "Toggle Done",
+        "category": "Redline",
+        "icon": "$(check)"
+      },
+      {
+        "command": "redline.revealNote",
+        "title": "Reveal Note",
+        "category": "Redline"
+      },
+      {
+        "command": "redline.reanchorNote",
+        "title": "Re-anchor at Cursor",
+        "category": "Redline",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "redline.reviseNote",
+        "title": "Revise… (not what I meant)",
+        "category": "Redline",
+        "icon": "$(issue-reopened)"
+      },
+      {
+        "command": "redline.submit",
+        "title": "Send Notes to Claude Code",
+        "category": "Redline",
+        "icon": "$(send)"
+      },
+      {
+        "command": "redline.sendSelected",
+        "title": "Send This Note to Claude Code",
+        "category": "Redline",
+        "icon": "$(send)"
+      },
+      {
+        "command": "redline.previewBatch",
+        "title": "Preview Notes",
+        "category": "Redline",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "redline.copyNote",
+        "title": "Copy This Note",
+        "category": "Redline",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "redline.applyReport",
+        "title": "Apply Claude's Report (done / skipped / answers)",
+        "category": "Redline",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "redline.clearSent",
+        "title": "Clear Sent Notes",
+        "category": "Redline",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "redline.clearAll",
+        "title": "Clear All Notes",
+        "category": "Redline",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "redline.restoreLastBatch",
+        "title": "Restore Last Submitted Batch",
+        "category": "Redline",
+        "icon": "$(history)"
+      },
+      {
+        "command": "redline.pickSession",
+        "title": "Choose Claude Code Session…",
+        "category": "Redline",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "redline.reviewChanges",
+        "title": "Review Latest Changes",
+        "category": "Redline",
+        "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "redline.nextChange",
+        "title": "Go to Next Change",
+        "category": "Redline",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "redline.prevChange",
+        "title": "Go to Previous Change",
+        "category": "Redline",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "redline.markBaseline",
+        "title": "Pin Baseline Here",
+        "category": "Redline",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "redline.clearBaseline",
+        "title": "Clear Pinned Baseline",
+        "category": "Redline"
+      },
+      {
+        "command": "redline.refresh",
+        "title": "Refresh",
+        "category": "Redline",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "redline.focusPanel",
+        "title": "Show Notes",
+        "category": "Redline"
+      },
+      {
+        "command": "redline.showLog",
+        "title": "Show Log",
+        "category": "Redline"
+      },
+      {
+        "command": "redline.setUpHook",
+        "title": "Set Up Claude Code Plugin",
+        "category": "Redline"
+      },
+      {
+        "command": "redline.reviewAllChanges",
+        "title": "Review All Changes",
+        "category": "Redline",
+        "icon": "$(diff-multiple)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "redline",
+          "title": "Redline",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "redline": [
+        {
+          "id": "redline.cards",
+          "name": "Notes",
+          "type": "webview",
+          "contextualTitle": "Redline",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "menus": {
+      "comments/commentThread/context": [
+        {
+          "command": "redline.createNote",
+          "group": "inline@1",
+          "when": "commentController == redline.notes && commentThreadIsEmpty"
+        }
+      ],
+      "comments/commentThread/title": [
+        {
+          "command": "redline.kindChange",
+          "group": "navigation@1",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        },
+        {
+          "command": "redline.kindBug",
+          "group": "navigation@2",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        },
+        {
+          "command": "redline.kindQuestion",
+          "group": "navigation@3",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        },
+        {
+          "command": "redline.kindIdea",
+          "group": "navigation@4",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        },
+        {
+          "command": "redline.kindRefactor",
+          "group": "navigation@5",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        },
+        {
+          "command": "redline.setKind",
+          "group": "navigation@6",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        },
+        {
+          "command": "redline.sendSelected",
+          "group": "navigation@7",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        },
+        {
+          "command": "redline.deleteNote",
+          "group": "navigation@8",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        }
+      ],
+      "comments/comment/title": [
+        {
+          "command": "redline.editComment",
+          "group": "group@1",
+          "when": "commentController == redline.notes && comment == redline.comment"
+        },
+        {
+          "command": "redline.setKind",
+          "group": "group@2",
+          "when": "commentController == redline.notes && comment == redline.comment"
+        },
+        {
+          "command": "redline.addFollowUp",
+          "group": "group@3",
+          "when": "commentController == redline.notes && comment == redline.comment"
+        },
+        {
+          "command": "redline.addSuggestion",
+          "group": "group@4",
+          "when": "commentController == redline.notes && comment == redline.comment"
+        },
+        {
+          "command": "redline.toggleDone",
+          "group": "group@5",
+          "when": "commentController == redline.notes && comment == redline.comment"
+        },
+        {
+          "command": "redline.deleteNote",
+          "group": "group@6",
+          "when": "commentController == redline.notes && comment == redline.comment"
+        }
+      ],
+      "comments/comment/context": [
+        {
+          "command": "redline.saveComment",
+          "group": "inline@1",
+          "when": "commentController == redline.notes"
+        },
+        {
+          "command": "redline.cancelEdit",
+          "group": "inline@2",
+          "when": "commentController == redline.notes"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "redline.submit",
+          "when": "view == redline.cards && redline.hasNotes",
+          "group": "navigation@1"
+        },
+        {
+          "command": "redline.reviewChanges",
+          "when": "view == redline.cards",
+          "group": "navigation@2"
+        },
+        {
+          "command": "redline.applyReport",
+          "when": "view == redline.cards && redline.hasSent",
+          "group": "navigation@3"
+        },
+        {
+          "command": "redline.previewBatch",
+          "when": "view == redline.cards && redline.hasNotes",
+          "group": "navigation@4"
+        },
+        {
+          "command": "redline.refresh",
+          "when": "view == redline.cards",
+          "group": "navigation@5"
+        },
+        {
+          "command": "redline.pickSession",
+          "when": "view == redline.cards",
+          "group": "1_config@1"
+        },
+        {
+          "command": "redline.markBaseline",
+          "when": "view == redline.cards",
+          "group": "1_config@2"
+        },
+        {
+          "command": "redline.clearBaseline",
+          "when": "view == redline.cards",
+          "group": "1_config@3"
+        },
+        {
+          "command": "redline.restoreLastBatch",
+          "when": "view == redline.cards && redline.hasArchive",
+          "group": "1_config@4"
+        },
+        {
+          "command": "redline.clearSent",
+          "when": "view == redline.cards && redline.hasSent",
+          "group": "9_danger@1"
+        },
+        {
+          "command": "redline.clearAll",
+          "when": "view == redline.cards && redline.hasNotes",
+          "group": "9_danger@2"
+        },
+        {
+          "command": "redline.reviewAllChanges",
+          "when": "view == redline.cards",
+          "group": "1_config@0"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "redline.quickAddNote",
+          "when": "editorTextFocus",
+          "group": "1_redline@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "redline.createNote",
+          "when": "false"
+        },
+        {
+          "command": "redline.saveComment",
+          "when": "false"
+        },
+        {
+          "command": "redline.cancelEdit",
+          "when": "false"
+        },
+        {
+          "command": "redline.editComment",
+          "when": "false"
+        },
+        {
+          "command": "redline.revealNote",
+          "when": "false"
+        },
+        {
+          "command": "redline.cancelReply",
+          "when": "false"
+        },
+        {
+          "command": "redline.sendSelected",
+          "when": "false"
+        },
+        {
+          "command": "redline.copyNote",
+          "when": "false"
+        },
+        {
+          "command": "redline.toggleDone",
+          "when": "false"
+        },
+        {
+          "command": "redline.deleteNote",
+          "when": "false"
+        },
+        {
+          "command": "redline.addSuggestion",
+          "when": "false"
+        },
+        {
+          "command": "redline.applySuggestion",
+          "when": "false"
+        },
+        {
+          "command": "redline.addFollowUp",
+          "when": "false"
+        },
+        {
+          "command": "redline.reviseNote",
+          "when": "false"
+        },
+        {
+          "command": "redline.setKind",
+          "when": "false"
+        },
+        {
+          "command": "redline.reanchorNote",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindBug",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindSecurity",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindPerf",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindIdea",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindRefactor",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindQuestion",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindTodo",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindNit",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindPraise",
+          "when": "false"
+        },
+        {
+          "command": "redline.kindChange",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "redline.quickAddNote",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "redline.submit",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s",
+        "when": "redline.hasNotes"
+      },
+      {
+        "command": "redline.nextChange",
+        "key": "alt+f7"
+      },
+      {
+        "command": "redline.prevChange",
+        "key": "shift+alt+f7"
+      },
+      {
+        "command": "redline.cancelReply",
+        "key": "escape",
+        "when": "commentEditorFocused && !suggestWidgetVisible && !findWidgetVisible"
+      }
+    ],
+    "configuration": {
+      "title": "Redline",
+      "properties": {
+        "redline.outputTemplate": {
+          "type": "string",
+          "enum": [
+            "claude-prompt",
+            "json"
+          ],
+          "default": "claude-prompt",
+          "enumDescriptions": [
+            "A prompt for Claude Code: notes grouped by intent with code and screenshots.",
+            "Structured JSON for scripts."
+          ],
+          "description": "Format used when sending or previewing notes."
+        },
+        "redline.includeSnippet": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include the referenced source lines with each note."
+        },
+        "redline.includeGitContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include repo, branch and HEAD in the prompt."
+        },
+        "redline.scopeGuard": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tell the agent to touch only the files the notes are about."
+        },
+        "redline.requestReport": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Ask the agent to finish with one line per note (`#12 done`, `#12 skipped — reason`, `#12 answer: …`) so **Apply Claude's Report** can update the panel."
+        },
+        "redline.confirmOnSubmit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask for confirmation before sending notes."
+        },
+        "redline.defaultKind": {
+          "type": "string",
+          "default": "comment",
+          "enum": [
+            "comment",
+            "bug",
+            "nit",
+            "question",
+            "refactor",
+            "perf",
+            "security",
+            "todo",
+            "praise",
+            "idea"
+          ],
+          "enumDescriptions": [
+            "change request",
+            "bug",
+            "nit",
+            "question",
+            "refactor",
+            "perf",
+            "security",
+            "todo",
+            "praise",
+            "idea"
+          ],
+          "description": "Kind given to new notes."
+        },
+        "redline.kindPrefixes": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Starting a note with `? ` makes it a question, `! ` a bug, `* ` an idea, `~ ` a nit, `+ ` praise (the prefix is removed)."
+        },
+        "redline.claudeAutoSubmit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Press Enter for you after pasting the notes into the Claude Code session."
+        },
+        "redline.watchSessions": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Watch the Claude Code session in this folder (Orca) and offer the diff when a run finishes."
+        },
+        "redline.excludeGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/*.min.*",
+            "**/.git/**"
+          ],
+          "description": "Files that never show the + gutter affordance."
+        },
+        "redline.maxFileLines": {
+          "type": "number",
+          "default": 50000,
+          "description": "Files longer than this never show the + gutter affordance."
+        },
+        "redline.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show note and changed-file counts in the status bar."
+        },
+        "redline.trace": {
+          "type": "string",
+          "enum": [
+            "off",
+            "errors",
+            "verbose"
+          ],
+          "default": "errors",
+          "description": "Verbosity of the Redline output channel."
+        },
+        "redline.lastRunGapMinutes": {
+          "type": "number",
+          "default": 15,
+          "minimum": 1,
+          "markdownDescription": "How long a pause between file edits starts a new \"run\". **Review Latest Changes** shows the most recent burst of edits; raise this if a slow agent run gets split in two."
+        },
+        "redline.clearDoneAfterReport": {
+          "type": "boolean",
+          "default": false,
+          "description": "Remove notes Claude reported as done. Off by default: the note stays on the line so you can reply to what it did."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "npm run check && npm run compile -- --production && vsce package --no-dependencies",
+    "check": "tsc --noEmit -p ./",
+    "lint": "eslint src",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "test": "npm run check && npm run check:media && npm run test:unit",
+    "test:unit": "tsc -p tsconfig.test.json && mocha \"out/test/unit/**/*.test.js\"",
+    "test:integration": "npm run compile && tsc -p tsconfig.test.json && node out/test/integration/runTests.js",
+    "vscode:prepublish": "npm run compile -- --production",
+    "check:media": "node --check media/cards.js",
+    "codicons:glyphs": "node scripts/generate-kind-glyphs.mjs",
+    "test:real": "npm run compile && tsc -p tsconfig.test.json && node out/test/integration/runRealRepo.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.7",
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^7.16.0",
+    "@typescript-eslint/parser": "^7.16.0",
+    "@vscode/codicons": "^0.0.46-24",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^3.1.0",
+    "esbuild": "^0.23.0",
+    "eslint": "^8.57.0",
+    "mocha": "^10.7.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "minimatch": "^9.0.9"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "redline",
+  "version": "0.1.0",
+  "description": "Bridges Claude Code with the Redline VS Code extension: records which files each run changes, and delivers review feedback without pasting it into the terminal.",
+  "author": {
+    "name": "marcin"
+  },
+  "keywords": [
+    "review",
+    "code review",
+    "vscode",
+    "redline"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

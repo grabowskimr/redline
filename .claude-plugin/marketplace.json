@@ -1,0 +1,14 @@
+{
+  "name": "redline",
+  "owner": { "name": "marcin" },
+  "metadata": {
+    "description": "The Claude Code side of Redline, the VS Code review extension."
+  },
+  "plugins": [
+    {
+      "name": "redline",
+      "source": "./plugin",
+      "description": "Records which files each run changes, and delivers review feedback from the Redline VS Code extension without pasting it into the terminal."
+    }
+  ]
+}
