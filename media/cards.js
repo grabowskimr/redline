@@ -221,7 +221,7 @@
         '</div>'
       : '';
     const status = n.pendingReply
-      ? '✎ reply not sent'
+      ? '✎ follow-up not sent'
       : n.awaiting
       ? '<span class="codicon codicon-loading codicon-modifier-spin"></span> waiting for Claude'
       : n.sent
@@ -265,7 +265,7 @@
       addenda +
       (settled ? '' : shots + snippet + after + sugg) +
       '<div class="reply"><textarea placeholder="' +
-      (n.sent ? 'Reply to Claude… (⌘⏎ to save, ➤ to send)' : 'Add to this note… (⌘⏎ to save)') +
+      (n.sent ? 'Follow-up… (⌘⏎ to save, ➤ to send)' : 'Follow-up… (⌘⏎ to save)') +
       '"></textarea></div>' +
       '<div class="actions">' +
       // Reply is always available: it is how a conversation continues, whatever state the
@@ -274,7 +274,7 @@
       btn(
         'reply',
         '↳',
-        n.sent ? 'Reply to Claude — continues this conversation' : 'Add to this note before it is sent',
+        n.sent ? 'Follow-up — continues this conversation with Claude' : 'Follow-up — added before this is sent',
       ) +
       (settled
         ? btn('reopen', '↺', n.done ? 'Reopen this note' : 'Mark as not done')

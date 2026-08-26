@@ -252,7 +252,10 @@ export function batchCommands(deps: Deps) {
       const next: NonNullable<ReviewNote['sent']> = { ...n.sent, outcome: it.outcome };
       if (it.text) next.reply = it.text;
       const patch: Partial<ReviewNote> = { sent: next };
-      if (it.outcome === 'answered' && it.text) {
+      // Whatever it said goes into the conversation, whether it answered a question, made a
+      // change, or declined one. A bare "done" beside changed code leaves nothing to read,
+      // and the note is now a thread that stays on the line.
+      if (it.text) {
         const addendum = `Claude: ${it.text}`;
         if (!n.addenda.includes(addendum)) patch.addenda = [...n.addenda, addendum];
       }

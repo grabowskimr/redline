@@ -44,7 +44,7 @@ export function commentLabel(note: ReviewNote): string {
   const bits = [formatLineRange(note.range)];
   // An unsent reply comes first: the note may say "done", but the conversation is waiting on
   // you to send what you just wrote, and that is the more useful thing to know.
-  if (hasUnsentReply(note)) bits.push('✎ reply not sent');
+  if (hasUnsentReply(note)) bits.push('✎ follow-up not sent');
   else if (note.sent?.outcome === 'done') bits.push('✅ done');
   else if (note.sent?.outcome === 'skipped') bits.push('⛔ skipped');
   else if (note.sent) bits.push('sent');

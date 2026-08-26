@@ -421,10 +421,10 @@ describe('rendering a card', () => {
     assert.doesNotMatch(html, /data-unshot/);
   });
 
-  it('shows the waiting state, and a send action for an unsent reply', () => {
+  it('shows the waiting state, and a send action for an unsent follow-up', () => {
     assert.match(render({ id: 'n1', seq: 1, body: 'x', awaiting: true }), /waiting for Claude/);
     const pending = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: false, outcome: 'done' }, pendingReply: true });
-    assert.match(pending, /reply not sent/);
+    assert.match(pending, /follow-up not sent/);
     assert.match(pending, /data-act="send"/);
   });
 });

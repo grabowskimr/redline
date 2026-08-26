@@ -94,7 +94,11 @@ export function claudePrompt(m: RenderModel): string {
       '## When you are done',
       '',
       'Reply with one line per note so I can track it, using exactly this format:',
-      '`#<number> done` · `#<number> skipped — <reason>` · `#<number> answer: <your answer>`',
+      '`#<number> done — <what you changed>` · `#<number> skipped — <why>` · `#<number> answer: <your answer>`',
+      '',
+      'Say what you actually did in each line, briefly — the line is kept beside the note as ' +
+        'your side of the conversation, and "done" on its own leaves nothing to read next to ' +
+        'code that has changed.',
       '',
     );
   }

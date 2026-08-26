@@ -201,7 +201,10 @@ describe('claude-prompt formatter (default)', () => {
     });
     assert.ok(text.startsWith('I reviewed the generated code and have some feedback: 1 question.\nPlease answer each question before changing anything. Only touch the files listed below'));
     assert.ok(text.includes('## When you are done'));
-    assert.ok(text.includes('`#<number> done`'));
+    // The format asks for a sentence with every outcome: the line is kept beside the note as
+    // Claude's side of the conversation, and a bare "done" leaves nothing to read there.
+    assert.ok(text.includes('`#<number> done — <what you changed>`'));
+    assert.match(text, /Say what you actually did in each line/);
     assert.equal(parseReport(text).length, 0, 'the footer itself must not parse as a report');
   });
 

@@ -23,6 +23,13 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Changed: Claude is asked to say what it actually did in every report line — `#3 done — moved
+  applyDiscount above the return` — and whatever it says becomes its turn in the note's
+  conversation. Previously only an answer to a question was kept, so a completed change left a
+  bare "done" beside code that had changed, with nothing to read.
+- Changed: the box on a note is called a **follow-up** everywhere. It is always present now,
+  on a note Claude has answered and on one it has never seen, and one box should not change its
+  name depending on what has happened to the note.
 - Fixed: the reply box could not be closed. Escape was bound, but only while the editor inside
   the box had focus — click the bar by accident, click elsewhere, and it stayed open with no
   way out. It now has a **Cancel** button, and cancelling closes only the note it belongs to

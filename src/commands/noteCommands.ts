@@ -266,7 +266,7 @@ export function noteCommands(deps: Deps) {
     store.update(note.id, { addenda: [...note.addenda, raw] });
     host.cancelReply(reply.thread.uri);
     void vscode.window.setStatusBarMessage(
-      note.sent ? `Redline: reply added to #${note.seq} — send it with ➤` : `Redline: added to #${note.seq}`,
+      note.sent ? `Redline: follow-up added to #${note.seq} — send it with ➤` : `Redline: added to #${note.seq}`,
       6000,
     );
   }
@@ -283,9 +283,7 @@ export function noteCommands(deps: Deps) {
     // answering it.
     const answered = !!note.sent;
     const text = await vscode.window.showInputBox({
-      prompt: answered
-        ? `Reply to Claude about #${note.seq} — ${firstLine(note.body, 60)}`
-        : `Add to #${note.seq} — ${firstLine(note.body, 60)}`,
+      prompt: `Follow-up on #${note.seq} — ${firstLine(note.body, 60)}`,
       placeHolder: answered
         ? 'Answer its question, or say what it got wrong…'
         : 'Extra context, a correction, a narrowing…',

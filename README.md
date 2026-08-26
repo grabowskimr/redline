@@ -77,10 +77,11 @@ Reply with one line per note so I can track it, using exactly this format:
 </details>
 
 
-**5. Keep talking about it.** A note is a conversation, not a one-shot. When Claude answers or
-reports a change, the note stays on its line — click the marker and type a reply. The note goes
-live again (**✎ reply not sent**), so you can attach a screenshot to it first, and **➤** sends
-the whole exchange: your original note, Claude's answer, your correction. That repeats until you
+**5. Keep talking about it.** A note is a conversation, not a one-shot. Claude is asked to say
+what it did in each report line — "done — moved applyDiscount above the return" rather than a
+bare "done" — and that becomes its turn beside your note. The note stays on its line, so you
+can click the marker and add a follow-up. It goes live again (**✎ follow-up not sent**), so you
+can attach a screenshot first, and **➤** sends the whole exchange: your original note, Claude's answer, your correction. That repeats until you
 remove the note. Useful when it changed the right file for the wrong reason.
 
 **6. Track the round.** Sent notes stay in the panel with a live badge — **✏️ code changed**
