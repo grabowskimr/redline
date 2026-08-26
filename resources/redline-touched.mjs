@@ -12,11 +12,10 @@
  * exactly" in the Redline README.
  *
  * Contract with Claude Code: reply with JSON and exit 0, always. A hook that fails or stalls
- * interferes with the tool call it is attached to, and recording file names is never worth
- * that. Every failure path here is silent. The wrapper sends the reply and discards this
- * script's output, so the line below only matters when running it by hand.
+ * interferes with the turn it is attached to, and none of this is worth that. Every failure
+ * path is silent.
  */
-import { appendFile, mkdir, stat, writeFile, readFile, readdir, unlink, copyFile, rm } from 'node:fs/promises';
+import { appendFile, mkdir, stat, writeFile, readFile, readdir, unlink, copyFile, rename, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -24,8 +23,8 @@ import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
 
-// Answer first: nothing below may delay or fail the tool call.
-process.stdout.write('{}\n');
+/** The hook's reply. `{}` unless there is something to inject. */
+let reply = {};
 
 /** Same scheme Claude Code uses for transcript directories, so Redline can find ours. */
 const slug = (dir) => dir.replace(/[^A-Za-z0-9-]/g, '-');
@@ -219,6 +218,54 @@ async function snapshotRunStart(root) {
   );
 }
 
+/**
+ * The token Redline types to hand over a batch of review feedback.
+ *
+ * Nothing is pasted into the terminal: Redline writes the feedback beside its other state and
+ * types this, and the prompt is answered here with the whole thing injected. A short token
+ * survives being typed where several kilobytes of prompt does not — which is what made
+ * sending unreliable in the first place.
+ *
+ * Deliberately free of `@` and `/`, which the agent's input treats specially.
+ */
+const DELIVERY_TOKEN = 'redline-review';
+
+/** Feedback older than this is stale — a batch nobody sent, or an interrupted one. */
+const OUTBOX_TTL_MS = 60 * 60 * 1000;
+
+/** Hand over any pending review feedback, and consume it so it cannot arrive twice. */
+async function takePendingReview(root, prompt) {
+  // Exact match. A substring test would hand over a batch to any prompt that merely mentions
+  // the tool — talking *about* Redline would silently consume a review.
+  if (prompt.trim().toLowerCase() !== DELIVERY_TOKEN) return undefined;
+  const file = join(logDir(root), 'outbox.md');
+  try {
+    const { mtimeMs } = await stat(file);
+    if (Date.now() - mtimeMs > OUTBOX_TTL_MS) {
+      await unlink(file);
+      return undefined;
+    }
+    const text = await readFile(file, 'utf8');
+    // Renamed rather than deleted: if anything goes wrong between here and the reply, the
+    // review still exists on disk instead of being lost with no way to get it back.
+    await rename(file, join(logDir(root), 'outbox.sent.md'));
+    return text.trim() || undefined;
+  } catch {
+    return undefined; // nothing waiting
+  }
+}
+
+/** Tells Redline the hook is installed and live here, so it can choose how to deliver. */
+async function markAlive(root) {
+  const dir = logDir(root);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, 'hook.json'),
+    JSON.stringify({ name: 'redline', version: 1, token: DELIVERY_TOKEN, at: new Date().toISOString() }),
+    'utf8',
+  );
+}
+
 /** Bounds: a snapshot is meant to be a handful of source files, not a copy of the tree. */
 const MAX_SNAPSHOT_FILES = 200;
 const MAX_SNAPSHOT_FILE_BYTES = 2 * 1024 * 1024;
@@ -250,6 +297,18 @@ try {
   const event = typeof payload.hook_event_name === 'string' ? payload.hook_event_name : '';
 
   if (event === 'UserPromptSubmit') {
+    const prompt = typeof payload.prompt === 'string' ? payload.prompt : '';
+    // Marked alive first: even if the snapshot fails, Redline should know the hook is here.
+    await markAlive(root);
+    const pending = await takePendingReview(root, prompt);
+    if (pending) {
+      reply = {
+        hookSpecificOutput: {
+          hookEventName: 'UserPromptSubmit',
+          additionalContext: pending,
+        },
+      };
+    }
     await snapshotRunStart(root);
   } else if (event === 'Stop') {
     // Deliberately not SubagentStop: a turn using subagents fires that once per subagent,
@@ -264,3 +323,5 @@ try {
 } catch {
   // Silent by design: see the contract note above.
 }
+
+process.stdout.write(JSON.stringify(reply) + '\n');

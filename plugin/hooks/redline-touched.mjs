@@ -15,7 +15,7 @@
  * interferes with the turn it is attached to, and none of this is worth that. Every failure
  * path is silent.
  */
-import { appendFile, mkdir, stat, writeFile, readFile, readdir, unlink, copyFile, rm } from 'node:fs/promises';
+import { appendFile, mkdir, stat, writeFile, readFile, readdir, unlink, copyFile, rename, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -235,7 +235,9 @@ const OUTBOX_TTL_MS = 60 * 60 * 1000;
 
 /** Hand over any pending review feedback, and consume it so it cannot arrive twice. */
 async function takePendingReview(root, prompt) {
-  if (!prompt.toLowerCase().includes(DELIVERY_TOKEN)) return undefined;
+  // Exact match. A substring test would hand over a batch to any prompt that merely mentions
+  // the tool — talking *about* Redline would silently consume a review.
+  if (prompt.trim().toLowerCase() !== DELIVERY_TOKEN) return undefined;
   const file = join(logDir(root), 'outbox.md');
   try {
     const { mtimeMs } = await stat(file);
@@ -244,7 +246,9 @@ async function takePendingReview(root, prompt) {
       return undefined;
     }
     const text = await readFile(file, 'utf8');
-    await unlink(file);
+    // Renamed rather than deleted: if anything goes wrong between here and the reply, the
+    // review still exists on disk instead of being lost with no way to get it back.
+    await rename(file, join(logDir(root), 'outbox.sent.md'));
     return text.trim() || undefined;
   } catch {
     return undefined; // nothing waiting

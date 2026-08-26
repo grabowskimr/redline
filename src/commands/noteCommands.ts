@@ -238,9 +238,17 @@ export function noteCommands(deps: Deps) {
       void vscode.window.showInformationMessage('Redline: select a note first.');
       return;
     }
+    // Two different acts, and calling both "follow-up" made the second one confusing: before
+    // Claude has said anything you are still adding to your own note; afterwards you are
+    // answering it.
+    const answered = !!note.sent;
     const text = await vscode.window.showInputBox({
-      prompt: `Follow-up to #${note.seq} — ${firstLine(note.body, 60)}`,
-      placeHolder: 'Extra context, a correction, a narrowing…',
+      prompt: answered
+        ? `Reply to Claude about #${note.seq} — ${firstLine(note.body, 60)}`
+        : `Add to #${note.seq} — ${firstLine(note.body, 60)}`,
+      placeHolder: answered
+        ? 'Answer its question, or say what it got wrong…'
+        : 'Extra context, a correction, a narrowing…',
       ignoreFocusOut: true,
     });
     if (text?.trim()) store.update(note.id, { addenda: [...note.addenda, text.trim()] });

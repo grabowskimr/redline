@@ -76,12 +76,12 @@
       },
       {
         "command": "redline.cancelReply",
-        "title": "Close Follow-up Box",
+        "title": "Close Reply Box",
         "category": "Redline"
       },
       {
         "command": "redline.addFollowUp",
-        "title": "Add Follow-up…",
+        "title": "Reply or Add to This Note…",
         "category": "Redline",
         "icon": "$(comment)"
       },

@@ -109,6 +109,23 @@ export function batchCommands(deps: Deps) {
     ) as Promise<T>;
   }
 
+  /**
+   * The session a note belongs to.
+   *
+   * A note remembers where it was sent. That session holds the whole exchange, so a reply has
+   * to go back to it rather than to whichever session happens to be preferred now — with two
+   * sessions open, the old behaviour asked every single time and could drop a reply into a
+   * session that had never seen the note.
+   */
+  async function targetForNote(note: ReviewNote): Promise<SessionTarget | undefined> {
+    const key = note.sent?.target;
+    if (!key) return undefined; // never sent: let the usual resolution choose
+    const still = await targetByKey(key, logger);
+    if (still) return still;
+    logger.info(`the session #${note.seq} was sent to is gone; choosing another`);
+    return undefined;
+  }
+
   /** Send a single note (the ➤ button on a card). */
   async function sendSelected(arg: unknown): Promise<void> {
     const id = resolveNoteIdOrPick(deps, arg);
@@ -121,8 +138,17 @@ export function batchCommands(deps: Deps) {
     // again — that is what continuing a conversation about it means.
     const text = await renderNotes(deps, store.notes, { onlyIds: [note.id], includeInactive: true });
     await copyToClipboard(deps, text);
-    const result = await progress(`sending #${note.seq} to Claude Code…`, () =>
-      sendBatchToClaude(text, deps.context, logger, { autoSubmit: config.claudeAutoSubmit }),
+
+    // Back to the session this note is already talking to. The conversation — the note, the
+    // answer, the reply — only exists in that one session's context, so sending a reply
+    // anywhere else would arrive without any of it. Only when that session is gone does this
+    // fall back to resolving one, which is also the only time a chooser should appear.
+    const target = await targetForNote(note);
+    const result = await progress(`sending #${note.seq} to ${target?.label ?? 'Claude Code'}…`, () =>
+      sendBatchToClaude(text, deps.context, logger, {
+        autoSubmit: config.claudeAutoSubmit,
+        ...(target ? { target } : {}),
+      }),
     );
     // A fresh send clears the previous verdict: the note is waiting on the agent again.
     store.update(note.id, { done: false });

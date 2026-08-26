@@ -56,7 +56,12 @@ export function commentLabel(note: ReviewNote): string {
 /** Just the note. Metadata lives in the author and label slots, not in the body. */
 export function renderCommentBody(note: ReviewNote): vscode.MarkdownString {
   const parts: string[] = [note.body];
-  for (const a of note.addenda) parts.push('', `↳ ${a}`);
+  // Claude's turns are stored with a "Claude:" prefix; showing who said what is the whole
+  // point once a note has become a conversation.
+  for (const a of note.addenda) {
+    const fromAgent = a.startsWith('Claude:');
+    parts.push('', fromAgent ? `↳ **Claude:** ${a.slice('Claude:'.length).trim()}` : `↳ **You:** ${a}`);
+  }
   if (note.suggestion !== undefined) {
     const fence = fenceFor(note.suggestion);
     parts.push('', '**Suggested change**', '', `${fence}${note.languageId ?? ''}`, note.suggestion, fence);

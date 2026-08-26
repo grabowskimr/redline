@@ -5,16 +5,31 @@
 # and a Node installed by nvm, Homebrew or Volta is frequently not on it. Without this, the
 # hook silently records nothing — the worst outcome, since it is designed not to complain.
 #
-# Answers `{}` immediately and always exits 0. A hook that fails or stalls interferes with
-# the tool call it is attached to, and recording file names is never worth that.
-printf '{}\n'
+# Always exits 0. A hook that fails or stalls interferes with the turn it is attached to, and
+# none of this is worth that.
 
-script="${HOME}/.claude/redline-touched.mjs"
-[ -r "$script" ] || exit 0
+payload=$({ command -p cat 2>/dev/null || cat; })
+[ -n "$payload" ] || { printf '{}\n'; exit 0; }
 
-# Redline's own installation check sets this: run inline and report problems, so a failure
-# is diagnosed instead of guessed at.
+# Two shapes of event:
+#
+#  - UserPromptSubmit runs inline and *answers*: it snapshots the tree before the agent edits
+#    anything, and it is where pending review feedback is injected into the prompt. Its JSON
+#    reply is the point, so it cannot be pre-empted with `{}`.
+#  - Everything else records and gets out of the way: `{}` first, work detached, no time added
+#    to the tool call.
 sync_mode="${REDLINE_HOOK_SYNC-}"
+case "$payload" in
+  *'"hook_event_name":"UserPromptSubmit"'*|*'"hook_event_name": "UserPromptSubmit"'*) sync_mode=1 ;;
+esac
+[ -n "$sync_mode" ] || printf '{}\n'
+
+script="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/hooks/redline-touched.mjs"
+[ -f "$script" ] || script="$HOME/.claude/redline-touched.mjs"
+if [ ! -r "$script" ]; then
+  [ -n "$sync_mode" ] && printf '{}\n'
+  exit 0
+fi
 
 node=$(command -v node 2>/dev/null)
 if [ -z "$node" ]; then
@@ -32,27 +47,14 @@ if [ -z "$node" ]; then
   done
 fi
 if [ -z "$node" ]; then
-  [ -n "$sync_mode" ] && echo "redline-hook: no node on PATH or in the usual locations" >&2
+  [ -n "$REDLINE_HOOK_SYNC" ] && echo "redline-hook: no node on PATH or in the usual locations" >&2
+  [ -n "$sync_mode" ] && printf '{}\n'
   exit 0
 fi
 
-# Read stdin here, then hand the payload to a detached child.
-#
-# Claude Code waits for this process to exit, so anything done synchronously is added to
-# every tool call — measured at 80-120ms for an edit and 210-350ms for Bash, where a `git
-# diff` is involved. None of that work is anything the agent needs to wait for: Redline
-# reacts to the log file changing, whenever that happens. The double fork detaches the
-# child so it survives this shell exiting.
-payload=$({ command -p cat 2>/dev/null || cat; })
-[ -n "$payload" ] || exit 0
-# A run-start snapshot must complete before the agent begins editing, so that one event is
-# handled inline. Everything else is detached and costs the tool call nothing.
-case "$payload" in
-  *'"hook_event_name":"UserPromptSubmit"'*|*'"hook_event_name": "UserPromptSubmit"'*) sync_mode=1 ;;
-esac
-
 if [ -n "$sync_mode" ]; then
-  printf '%s' "$payload" | "$node" "$script" >/dev/null
+  # stdout is the hook's reply and passes straight through.
+  printf '%s' "$payload" | "$node" "$script"
   exit 0
 fi
 ( printf '%s' "$payload" | "$node" "$script" >/dev/null 2>&1 & ) >/dev/null 2>&1

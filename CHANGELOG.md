@@ -23,6 +23,17 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: **a reply went to whichever session happened to be preferred, not the one holding the
+  conversation.** Sending a single note ignored the session it had already been sent to, so with
+  two sessions open it asked every time — and could drop a reply into a session that had never
+  seen the note or Claude's answer. A note now goes back to its own session, and a chooser only
+  appears when that session is gone.
+- Changed: "follow-up" now only means adding to a note *before* Claude has said anything. Once
+  it has answered, the same act is a **reply** — the widget, the card and the command all say so,
+  and the comment widget shows who said what (**You:** / **Claude:**) instead of a list of arrows.
+- Fixed: the delivery token had to merely *appear* in a prompt to hand over a batch, so asking
+  Claude about Redline could silently consume a pending review. It must now be the whole prompt,
+  and the batch is renamed rather than deleted so it survives anything going wrong mid-handover.
 - Added: **a real Claude Code plugin.** `claude plugin marketplace add <repo>` then
   `claude plugin install redline@redline` replaces copying two scripts into `~/.claude` and
   merging four hook blocks into `settings.json`. Hook commands resolve through

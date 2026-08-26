@@ -258,12 +258,18 @@
       // hiding it would throw away the only thing the round produced.
       addenda +
       (settled ? '' : shots + snippet + after + sugg) +
-      '<div class="reply"><textarea placeholder="Add a follow-up… (⌘⏎ to add)"></textarea></div>' +
+      '<div class="reply"><textarea placeholder="' +
+      (n.sent ? 'Reply to Claude… (⌘⏎ to save, ➤ to send)' : 'Add to this note… (⌘⏎ to save)') +
+      '"></textarea></div>' +
       '<div class="actions">' +
       // Reply is always available: it is how a conversation continues, whatever state the
       // note is in. Attaching is available whenever something is still going to be sent,
       // because a reply often needs a screenshot before it goes.
-      btn('reply', '↳', settled ? 'Reply to Claude — continues this conversation' : 'Add a follow-up') +
+      btn(
+        'reply',
+        '↳',
+        n.sent ? 'Reply to Claude — continues this conversation' : 'Add to this note before it is sent',
+      ) +
       (settled
         ? btn('reopen', '↺', n.done ? 'Reopen this note' : 'Mark as not done')
         : btn(
