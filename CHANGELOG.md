@@ -23,6 +23,10 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: two "Claude finished" notifications could still appear. The guards were about *which
+  channel* spoke, and covered the two known reporters; the last line of defence is now about the
+  *message* — the same summary twice in quick succession is one run, whatever produced it. Each
+  report is also logged with the channel that raised it, so a recurrence names its own cause.
 - Changed: Claude is asked to say what it actually did in every report line — `#3 done — moved
   applyDiscount above the return` — and whatever it says becomes its turn in the note's
   conversation. Previously only an answer to a question was kept, so a completed change left a

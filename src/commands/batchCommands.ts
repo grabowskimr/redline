@@ -25,6 +25,16 @@ const RUN_REPORT_QUIET_MS = 20_000;
  */
 const HOOK_OWNS_REPORTING_MS = 5 * 60_000;
 
+/**
+ * The same summary inside this window is the same run.
+ *
+ * Deliberately about the message rather than the channel: the two known reporters are guarded
+ * against each other above, and this catches whatever produced a duplicate that those guards
+ * did not anticipate. A genuine second run rarely changes nothing new, so the cost of being
+ * wrong here is one missing toast, not a missing review.
+ */
+const SAME_REPORT_MS = 2 * 60_000;
+
 export function batchCommands(deps: Deps) {
   const { store, config, logger, index, range, watcher } = deps;
 
@@ -293,6 +303,9 @@ export function batchCommands(deps: Deps) {
   let lastRunReport = 0;
   /** When the plugin last reported one, which takes the job off the idle monitor. */
   let lastHookReport = 0;
+  /** The last thing actually shown, and when. Two identical summaries are one run. */
+  let lastReportText = '';
+  let lastReportTextAt = 0;
 
   /**
    * A run finished. Read the report, mark the notes, and say so exactly once.
@@ -354,6 +367,16 @@ export function batchCommands(deps: Deps) {
       return;
     }
     const summaryText = [notes.join(' · '), changes].filter(Boolean).join(' · ');
+
+    // Last line of defence, and the one that does not depend on knowing which channel spoke:
+    // the same summary twice in quick succession describes the same run, whatever produced it.
+    if (summaryText === lastReportText && Date.now() - lastReportTextAt < SAME_REPORT_MS) {
+      logger.info(`suppressed a repeat "${summaryText}" from ${source}`);
+      return;
+    }
+    lastReportText = summaryText;
+    lastReportTextAt = Date.now();
+    logger.info(`run reported by ${source}: ${summaryText}`);
     const actions = [
       ...(changes ? ['Review changes'] : []),
       'Show notes',
