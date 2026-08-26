@@ -27,9 +27,54 @@ request, bug, question, idea, refactor — with the rest behind **Set Kind…**,
 note** and **remove it**, so a single piece of feedback never needs the panel.
 
 
-**4. Send** (`⌘⌥S`). The notes become one prompt, pasted straight into the Claude Code
-session for this folder — and copied to your clipboard as a fallback. **Preview Notes**
-shows you exactly what it will receive first.
+**4. Send** (`⌘⌥S`). The notes become one prompt for the Claude Code session in this folder —
+and go to your clipboard as a fallback. **Preview Notes** shows you exactly what it will
+receive first. Three notes on two files produce this:
+
+<details>
+<summary>The generated prompt</summary>
+
+````markdown
+I reviewed the generated code and have some feedback: 2 change requests, 1 question.
+Work through the change requests in order; if one is unclear or you disagree, say so and ask before changing it. Answer the questions first — only change code for a question if we agree. Only touch the files listed below; don't make unrelated changes.
+
+**Branch:** feat/annual-billing · **HEAD:** e746bf1 (uncommitted changes present)
+
+## Change requests
+
+### #2 — src/billing/load.ts · Line 2
+Kind: security
+Code:
+```ts
+  const rows = await db.query(`SELECT * FROM plans WHERE id = ${id}`);
+```
+User comment: "id goes straight into the query. Use a parameterised statement."
+
+### #1 — src/billing/price.ts · Line 3
+Kind: bug
+Code:
+```ts
+  return base;
+```
+User comment: "This drops the annual discount — base is returned before applyDiscount runs."
+
+## Questions
+
+### #3 — src/billing/price.ts · Line 3
+Kind: question
+Code:
+```ts
+  return base;
+```
+User comment: "Why return early here rather than falling through to the tax step?"
+
+## When you are done
+
+Reply with one line per note so I can track it, using exactly this format:
+`#<number> done` · `#<number> skipped — <reason>` · `#<number> answer: <your answer>`
+````
+
+</details>
 
 
 **5. Keep talking about it.** A note is a conversation, not a one-shot. When Claude answers or
