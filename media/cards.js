@@ -161,6 +161,12 @@
     '</button>';
 
   function card(n) {
+    // Settled: dealt with, and nothing left to read — collapsed, dimmed, and removable in one
+    // click rather than through the ⋯ menu. A reply that has not been sent makes it live
+    // again: the conversation is waiting on you, not on Claude. Declared first because the
+    // screenshot and action markup below both depend on it.
+    const settled = !!(n.done || (n.sent && n.sent.outcome)) && !n.pendingReply;
+
     const beforeAfter = n.after !== undefined && n.after !== null;
     const codeLabel = n.orphaned
       ? 'original code (stale)'
@@ -204,7 +210,9 @@
               ' — click to open" data-shot="' +
               esc(a.path) +
               '">' +
-              (n.sent
+              // Removable exactly when attaching is offered. Keyed on `sent` alone, a
+              // screenshot added to a reply could never be taken off again.
+              (settled
                 ? ''
                 : '<span class="x" data-unshot="' + esc(a.path) + '" title="Remove screenshot">✕</span>') +
               '</span>',
@@ -223,11 +231,6 @@
       : n.orphaned
       ? '⚠ stale'
       : '';
-    // Settled: dealt with, and nothing left to read. Collapse it and make removing it a
-    // single click instead of a trip through the ⋯ menu. A reply that has not been sent
-    // makes it live again — the conversation is waiting on you, not on Claude.
-    const settled = !!(n.done || (n.sent && n.sent.outcome)) && !n.pendingReply;
-
     return (
       '<div class="card' +
       (n.done && !n.pendingReply ? ' done' : '') +

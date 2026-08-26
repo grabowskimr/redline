@@ -23,6 +23,12 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: a screenshot attached to a reply could not be removed. The remove control was keyed
+  on the note having been sent, so any note that had ever been sent kept its images for good —
+  including one just added to an unsent reply. It now appears exactly when attaching does.
+- Changed: the comment widget's reply bar takes the widget's own background instead of a stark
+  block, via a transparent `editorCommentsWidget.replyInputBackground` default. The README
+  lists the other `editorCommentsWidget.*` colours worth tuning.
 - Fixed: **the reply box had no submit action.** The only command bound to it was gated on the
   thread being *empty*, so on a note that already existed nothing was bound at all — typing and
   pressing ⌘⏎ did nothing, with no error to go on. A reply command is now bound for a thread

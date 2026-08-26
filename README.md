@@ -231,6 +231,24 @@ finishes while VS Code is open pings you with the diff.
 Settings you wrote as `localReview.*` before the rename are still read, so nothing breaks if
 you don't touch them.
 
+## Appearance
+
+The comment widget is VS Code's own, themed by `editorCommentsWidget.*`. Redline sets one
+default: the reply bar's background is transparent, so it takes the widget's colour instead of
+sitting on it as a slab. Transparency rather than a colour, because a literal one would be
+wrong on half the themes people use.
+
+Override it, or tune the rest, in your settings:
+
+```json
+"workbench.colorCustomizations": {
+  "editorCommentsWidget.replyInputBackground": "#00000000",
+  "editorCommentsWidget.unresolvedBorder": "#d97757",
+  "editorCommentsWidget.resolvedBorder": "#00000040",
+  "editorCommentsWidget.rangeBackground": "#d9775714"
+}
+```
+
 ## Privacy
 
 No network access of any kind, no telemetry. Git and session information is read locally;

@@ -761,6 +761,11 @@
           "description": "Remove notes Claude reported as done. Off by default: the note stays on the line so you can reply to what it did."
         }
       }
+    },
+    "configurationDefaults": {
+      "workbench.colorCustomizations": {
+        "editorCommentsWidget.replyInputBackground": "#00000000"
+      }
     }
   },
   "scripts": {

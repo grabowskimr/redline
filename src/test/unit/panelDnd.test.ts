@@ -372,3 +372,59 @@ describe('panel busy feedback', () => {
     h.fire('message', { data: { type: 'idle' } });
   });
 });
+
+describe('rendering a card', () => {
+  /**
+   * Drives the real `card()` through the DOM shim. Nothing else did: the drag and busy tests
+   * only fire events, so a card that threw on render — a `const` read before its declaration,
+   * say — went unnoticed until the panel was opened by hand.
+   */
+  const render = (note: Record<string, unknown>): string => {
+    const h = harness();
+    h.fire('message', {
+      data: {
+        type: 'notes',
+        groups: [{ base: 'a.ts', dir: 'src', notes: [{ kind: 'comment', kindIcon: 'comment', where: 'L1', ...note }] }],
+        sent: [],
+        kinds: [],
+      },
+    });
+    return h.root.innerHTML;
+  };
+
+  const shot = [{ src: 'vscode://x/a.png', path: '/tmp/a.png', name: 'a.png' }];
+
+  it('renders at all', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'rename this' });
+    assert.match(html, /class="card/);
+    assert.match(html, /rename this/);
+  });
+
+  it('offers to remove a screenshot on a note that has not been sent', () => {
+    assert.match(render({ id: 'n1', seq: 1, body: 'x', attachments: shot }), /data-unshot/);
+  });
+
+  it('offers to remove one added to a reply on a note already sent', () => {
+    // The reported bug: keyed on `sent` alone, an image attached to a reply was stuck there.
+    const html = render({
+      id: 'n1', seq: 1, body: 'x', attachments: shot,
+      sent: { changed: false, outcome: 'done' }, pendingReply: true,
+    });
+    assert.match(html, /data-unshot/, 'removable while the reply is still unsent');
+  });
+
+  it('does not offer removal once the note is settled', () => {
+    const html = render({
+      id: 'n1', seq: 1, body: 'x', attachments: shot, done: true,
+      sent: { changed: false, outcome: 'done' },
+    });
+    assert.doesNotMatch(html, /data-unshot/);
+  });
+
+  it('shows the waiting state, and a send action for an unsent reply', () => {
+    assert.match(render({ id: 'n1', seq: 1, body: 'x', awaiting: true }), /waiting for Claude/);
+    const pending = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: false, outcome: 'done' }, pendingReply: true });
+    assert.match(pending, /reply not sent/);
+    assert.match(pending, /data-act="send"/);
+  });
+});
