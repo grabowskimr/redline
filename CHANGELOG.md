@@ -23,6 +23,10 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: the reply box could not be closed. Escape was bound, but only while the editor inside
+  the box had focus — click the bar by accident, click elsewhere, and it stayed open with no
+  way out. It now has a **Cancel** button, and cancelling closes only the note it belongs to
+  rather than every open reply in the file.
 - Fixed: a screenshot attached to a reply could not be removed. The remove control was keyed
   on the note having been sent, so any note that had ever been sent kept its images for good —
   including one just added to an unsent reply. It now appears exactly when attaching does.

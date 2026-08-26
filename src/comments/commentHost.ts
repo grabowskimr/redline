@@ -98,8 +98,12 @@ export class CommentHost implements vscode.Disposable {
    * Close the follow-up textarea (discarding its draft) without collapsing the widgets.
    * Toggling `canReply` re-renders the reply area back to its collapsed state.
    */
-  cancelReply(uri: vscode.Uri): boolean {
-    const threads = this.threadsForUri(uri);
+  cancelReply(uri: vscode.Uri, only?: vscode.CommentThread): boolean {
+    // Just the thread the Cancel came from, when it is known. Falling back to every thread in
+    // the file would close a reply being written on a different note.
+    const threads = only
+      ? this.threadsForUri(uri).filter(({ thread }) => thread === only)
+      : this.threadsForUri(uri);
     if (threads.length === 0) return false;
     for (const { thread } of threads) thread.canReply = false;
     setTimeout(() => {

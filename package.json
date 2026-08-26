@@ -76,7 +76,7 @@
       },
       {
         "command": "redline.cancelReply",
-        "title": "Close Reply Box",
+        "title": "Cancel",
         "category": "Redline"
       },
       {
@@ -340,6 +340,11 @@
           "command": "redline.createNote",
           "group": "inline@2",
           "when": "commentController == redline.notes && commentThreadIsEmpty"
+        },
+        {
+          "command": "redline.cancelReply",
+          "group": "inline@3",
+          "when": "commentController == redline.notes"
         }
       ],
       "comments/commentThread/title": [

@@ -82,6 +82,11 @@ describe('Redline (integration)', function () {
     assert.ok(empty, 'a new thread can be submitted');
     assert.ok(existing, 'an existing note can be replied to');
     assert.notEqual(empty.command, existing.command, 'the two states run different commands');
+
+    // Escape only fires while the box has focus, so clicking it by accident and then clicking
+    // away must still leave a visible way out.
+    const cancel = entries.find((e) => e.command === 'redline.cancelReply');
+    assert.ok(cancel, 'the reply box offers a cancel action');
   });
 
   it('runs every palette-safe command with no arguments without throwing', async () => {

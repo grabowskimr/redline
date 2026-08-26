@@ -225,9 +225,20 @@ export function noteCommands(deps: Deps) {
   }
 
   /** Escape in the comment editor: close the reply box, keep the note visible. */
-  async function cancelReply(): Promise<void> {
-    const ed = vscode.window.activeTextEditor;
-    const handled = ed ? host.cancelReply(ed.document.uri) : false;
+  /**
+   * Close the reply box, discarding whatever was typed in it.
+   *
+   * Reachable from the box's own Cancel button as well as Escape: the keybinding only fires
+   * while the editor inside the box has focus, so clicking the bar by accident and then
+   * clicking elsewhere left it open with no way out.
+   *
+   * The argument is whatever the menu passed — a `CommentReply` when it comes from the box —
+   * which is more reliable than the active editor for finding the thread.
+   */
+  async function cancelReply(arg?: unknown): Promise<void> {
+    const reply = arg as vscode.CommentReply | undefined;
+    const uri = reply?.thread?.uri ?? vscode.window.activeTextEditor?.document.uri;
+    const handled = uri ? host.cancelReply(uri, reply?.thread) : false;
     if (!handled) await vscode.commands.executeCommand('workbench.action.hideComment');
   }
 
