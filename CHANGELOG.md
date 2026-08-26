@@ -23,6 +23,12 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: **the reply box had no submit action.** The only command bound to it was gated on the
+  thread being *empty*, so on a note that already existed nothing was bound at all — typing and
+  pressing ⌘⏎ did nothing, with no error to go on. A reply command is now bound for a thread
+  that has a note, and the original stays for a new one.
+- Changed: the collapsed reply bar says "Reply…" rather than a sentence. VS Code renders that
+  label full width and in bold, where a long one reads as a heading instead of an invitation.
 - Fixed: **the comment widget had no reply box.** `canReply` was off — correct while replying
   created a second note on the same line, wrong once it adds a turn — so the only route to a
   reply was the `⋯` menu, where nobody would find it. The widget now has a reply field, and a

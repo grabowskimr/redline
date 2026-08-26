@@ -231,6 +231,35 @@ export function noteCommands(deps: Deps) {
     if (!handled) await vscode.commands.executeCommand('workbench.action.hideComment');
   }
 
+  /**
+   * Submit the comment widget's reply box on a note that already exists.
+   *
+   * `createNote` only answers for an empty thread, so without this the reply box on an
+   * existing note had no submit action bound to it at all — typing and pressing ⌘⏎ did
+   * nothing, which is not a state anyone can diagnose from the outside.
+   *
+   * The turn is recorded, not sent: a reply often wants a screenshot attached first, and ➤
+   * is the deliberate act that sends it.
+   */
+  async function replyToNote(arg: unknown): Promise<void> {
+    const reply = arg as vscode.CommentReply | undefined;
+    const raw = typeof reply?.text === 'string' ? reply.text.trim() : '';
+    if (!reply?.thread || !raw) return;
+    const id = host.noteIdFor(reply.thread);
+    const note = id ? store.getById(id) : undefined;
+    if (!note) {
+      // The thread has no note behind it: treat this as a new one rather than losing the text.
+      await createNote(arg);
+      return;
+    }
+    store.update(note.id, { addenda: [...note.addenda, raw] });
+    host.cancelReply(reply.thread.uri);
+    void vscode.window.setStatusBarMessage(
+      note.sent ? `Redline: reply added to #${note.seq} — send it with ➤` : `Redline: added to #${note.seq}`,
+      6000,
+    );
+  }
+
   async function addFollowUp(arg: unknown): Promise<void> {
     const id = resolveNoteIdOrPick(deps, arg);
     const note = id ? store.getById(id) : undefined;
@@ -455,6 +484,7 @@ export function noteCommands(deps: Deps) {
     cancelEdit,
     cancelReply,
     addFollowUp,
+    replyToNote,
     deleteNote,
     toggleDone,
     setKind,

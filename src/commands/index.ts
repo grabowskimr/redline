@@ -10,6 +10,7 @@ export const COMMAND_IDS = [
   'redline.cancelEdit',
   'redline.cancelReply',
   'redline.addFollowUp',
+  'redline.replyToNote',
   'redline.deleteNote',
   'redline.setKind',
   'redline.kindChange',

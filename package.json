@@ -301,6 +301,12 @@
         "title": "Review All Changes",
         "category": "Redline",
         "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "redline.replyToNote",
+        "title": "Reply",
+        "category": "Redline",
+        "icon": "$(reply)"
       }
     ],
     "viewsContainers": {
@@ -326,8 +332,13 @@
     "menus": {
       "comments/commentThread/context": [
         {
-          "command": "redline.createNote",
+          "command": "redline.replyToNote",
           "group": "inline@1",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        },
+        {
+          "command": "redline.createNote",
+          "group": "inline@2",
           "when": "commentController == redline.notes && commentThreadIsEmpty"
         }
       ],

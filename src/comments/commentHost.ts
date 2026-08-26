@@ -53,8 +53,10 @@ export class CommentHost implements vscode.Disposable {
     this.controller.options = {
       // `prompt` labels the collapsed reply box; `placeHolder` is the empty textarea. The
       // widget's own header ("Start discussion") is VS Code's and cannot be set from here.
-      prompt: 'Reply, or add to this note…',
-      placeHolder: 'What should change here?   ? question · ! bug · * idea · ~ nit',
+      // `prompt` is the collapsed reply bar, rendered full width and in bold — long text
+      // there reads as a heading rather than an invitation to type.
+      prompt: 'Reply…',
+      placeHolder: 'Answer Claude, or add to this note…',
     };
     this.controller.commentingRangeProvider = new RangeProvider(config);
     this.subs.push(

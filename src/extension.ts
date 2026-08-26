@@ -174,6 +174,7 @@ async function activateInner(
     'redline.cancelEdit': notes.cancelEdit,
     'redline.cancelReply': notes.cancelReply,
     'redline.addFollowUp': notes.addFollowUp,
+    'redline.replyToNote': notes.replyToNote,
     'redline.deleteNote': notes.deleteNote,
     'redline.setKind': notes.setKind,
     'redline.kindChange': notes.kindChange,

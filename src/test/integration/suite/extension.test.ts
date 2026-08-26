@@ -70,6 +70,20 @@ describe('Redline (integration)', function () {
     }
   });
 
+  it('binds a submit action to the reply box in both thread states', async () => {
+    // Without this, an existing note's reply box has no command behind it: typing and
+    // pressing ⌘⏎ does nothing at all, which cannot be diagnosed from the outside.
+    const pkg = vscode.extensions.getExtension(EXT_ID)?.packageJSON as {
+      contributes: { menus: { 'comments/commentThread/context': Array<{ command: string; when: string }> } };
+    };
+    const entries = pkg.contributes.menus['comments/commentThread/context'];
+    const empty = entries.find((e) => /(?<!!)commentThreadIsEmpty/.test(e.when));
+    const existing = entries.find((e) => e.when.includes('!commentThreadIsEmpty'));
+    assert.ok(empty, 'a new thread can be submitted');
+    assert.ok(existing, 'an existing note can be replied to');
+    assert.notEqual(empty.command, existing.command, 'the two states run different commands');
+  });
+
   it('runs every palette-safe command with no arguments without throwing', async () => {
     const pkg = vscode.extensions.getExtension(EXT_ID)?.packageJSON as {
       contributes: { commands: Array<{ command: string }>; menus: { commandPalette: Array<{ command: string }> } };
