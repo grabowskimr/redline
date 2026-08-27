@@ -59,7 +59,10 @@ export class CommentHost implements vscode.Disposable {
       // One word for one box: it is always present now, on a note Claude has answered and on
       // one it has never seen, and "follow-up" covers both without changing under you.
       prompt: 'Follow-up…',
-      placeHolder: 'Answer Claude, or add to this note…',
+      // One placeholder serves both a new note and a follow-up — the controller has a single
+      // value for it — so it earns its space by teaching the kind prefixes, which are
+      // otherwise undiscoverable. Matches PREFIX_KINDS in commands/noteCommands.
+      placeHolder: 'What should change here?   ? question · ! bug · * idea · ~ nit · + praise',
     };
     this.controller.commentingRangeProvider = new RangeProvider(config);
     this.subs.push(
