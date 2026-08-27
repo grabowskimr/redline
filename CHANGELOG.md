@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0 — 2026-08-27
+
+**Runs you start yourself now show up.** A prompt typed straight into a Claude Code session —
+in a VS Code terminal, in iTerm, in tmux, anywhere — goes through the same hooks as one Redline
+sent, so the record of what changed is identical. What was missing was the reaction: reporting
+a finished run was gated on `resolveTarget`, which only returns a session Redline can *type
+into*. A session in an external terminal resolved to nothing, so `onDidEndRun` did nothing at
+all, and the run went unreported even though the hook had already written the trees.
+
+Knowing that a run finished and being able to reach it are two different things. Only sending
+needs the second one.
+
+- The hook's stop marker is now read directly: it carries the run's timestamp and the session
+  id, so a finished run is reported whether or not there is a process to point at — even if the
+  session has since exited.
+- The run is identified by that timestamp instead of by a time window. The hook keeps state for
+  every repository under one directory, so a run finishing in another worktree signalled here
+  too and could be announced as this repository's; now a marker that is not ours is simply not
+  ours. This also replaces the guesswork that was suppressing duplicate notifications.
+- Claude's answer is read from the session the hook *names*, rather than from the
+  most-recently-modified transcript in the folder. With two sessions open, that was a guess,
+  and the wrong one attributes another session's reply to this run.
+- New `redline.onRunFinished`: `notify` (default), `open` to go straight to the last run's diff,
+  or `nothing` to leave it to the panel.
+- Sending to a session outside VS Code works from the other direction: with no terminal to type
+  into, the batch is staged where the hook looks and the delivery word goes on the clipboard —
+  type `redline-review` in your session and the hook injects the whole review. Previously this
+  case fell back to pasting several kilobytes by hand.
+- The panel's session strip names a session it can see but not reach, instead of looking
+  disconnected while tracking the run perfectly well.
+- No plugin change: this needs 0.2.1, which you already have.
+
 ## 0.4.2 — 2026-08-27
 
 A review of 0.4.0, which found six things. Two of them made snapshots fail outright, and both

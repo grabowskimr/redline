@@ -3,7 +3,9 @@ import { AGENT_TURN_PREFIX, isOpen, ReviewNote } from '../model/note';
 import { copyToClipboard, currentHashes, openPreview, renderNotes } from '../export/submit';
 import { parseReport } from '../export/report';
 import { pickTarget, readTarget, resolveTarget, sendBatchToClaude, SessionTarget, targetByKey } from '../claude/claudeSession';
-import { latestSessionAmong, recentAssistantText } from '../claude/transcripts';
+import { ClaudeSessionInfo, findSessions, latestSessionAmong, recentAssistantText } from '../claude/transcripts';
+import { readStopMarker } from '../claude/runTrees';
+import { deliveryToken, stageForHandover } from '../claude/handover';
 import { Deps, resolveNoteIdOrPick } from './deps';
 
 /**
@@ -76,7 +78,11 @@ export function batchCommands(deps: Deps) {
       ]
         .filter(Boolean)
         .join(' · ');
-      const where = target ? `Sends to ${target.label} and copies to the clipboard.` : 'Copies to the clipboard (no Claude Code session found).';
+      const where = target
+        ? `Sends to ${target.label} and copies to the clipboard.`
+        : (await hookCanCollect())
+          ? 'No session VS Code can type into. Stages the batch for the Claude Code plugin — you type one short word to deliver it.'
+          : 'Copies to the clipboard (no Claude Code session found).';
       const choice = await vscode.window.showInformationMessage(
         `Send ${summary(open.length, fileCount)} to Claude Code?`,
         { modal: true, detail: `${detail}\n\n${where}` },
@@ -96,6 +102,10 @@ export function batchCommands(deps: Deps) {
     }
 
     await copyToClipboard(deps, text);
+    // No terminal to type into, but the plugin can still collect the batch: it is staged where
+    // the hook looks, and one short word typed into the session delivers the whole thing. This
+    // is the only route for a Claude Code session running outside VS Code.
+    const staged = target ? undefined : await stageForUnreachableSession(text);
     const result = await progress(target ? `sending to ${target.label}…` : 'copying…', async () =>
       target
         ? await sendBatchToClaude(text, deps.context, logger, { autoSubmit: config.claudeAutoSubmit, target })
@@ -109,6 +119,22 @@ export function batchCommands(deps: Deps) {
     store.markSent(ids, result?.ok ? result.target?.key : undefined, await currentHashes(open));
     for (const id of ids) index.clearChangedSinceSent(id);
     if (result?.ok && result.target) startWatch(result.target);
+
+    // Staged for a session outside VS Code: the token is what the user has to type, so it goes
+    // on the clipboard in place of the batch itself and the message says what to do with it.
+    if (staged) {
+      await vscode.env.clipboard.writeText(staged);
+      void vscode.window
+        .showInformationMessage(
+          `Redline: ${summary(open.length, fileCount)} staged for Claude Code. ` +
+            `Type \`${staged}\` in your session to deliver it.`,
+          'Copy the word again',
+        )
+        .then(async (choice) => {
+          if (choice === 'Copy the word again') await vscode.env.clipboard.writeText(staged);
+        });
+      return;
+    }
 
     const tail = result?.ok ? ` ${result.message}` : result ? ` (${result.message})` : '';
     void vscode.window
@@ -211,7 +237,7 @@ export function batchCommands(deps: Deps) {
    * Pull `#12 done / skipped / answer` lines from the terminal the batch was sent to
    * (falling back to the clipboard) and apply them to the sent notes.
    */
-  async function applyReportFrom(target?: SessionTarget, quiet = false): Promise<number> {
+  async function applyReportFrom(target?: SessionTarget, quiet = false, sessionId?: string): Promise<number> {
     const sentNotes = store.notes.filter((n) => n.sent);
     if (sentNotes.length === 0) {
       if (!quiet) void vscode.window.showInformationMessage('Redline: no sent notes to update.');
@@ -226,7 +252,11 @@ export function batchCommands(deps: Deps) {
     // The session transcript first: it holds the agent's exact words. A terminal capture of
     // a TUI is mostly redraw frames, so the reply is usually not in it at all.
     const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
-    const session = await latestSessionAmong([resolved?.cwd ?? '', ...folders]);
+    // The session the hook named, when it named one: with two sessions open in one folder,
+    // "the most recently modified transcript" is a guess, and reading the wrong one would
+    // attribute another session's answer to this run.
+    const named = sessionId ? await namedSession(sessionId, [resolved?.cwd ?? '', ...folders]) : undefined;
+    const session = named ?? (await latestSessionAmong([resolved?.cwd ?? '', ...folders]));
     if (session) {
       text = await recentAssistantText(session);
       if (text) source = 'the Claude Code transcript';
@@ -315,9 +345,10 @@ export function batchCommands(deps: Deps) {
    * run and each used to raise its own notification.
    */
   async function reportRunFinished(
-    target: SessionTarget,
+    target: SessionTarget | undefined,
     external: boolean,
     source: 'hook' | 'monitor' = 'monitor',
+    sessionId?: string,
   ): Promise<void> {
     const now = Date.now();
     if (source === 'monitor' && now - lastHookReport < HOOK_OWNS_REPORTING_MS) {
@@ -333,7 +364,7 @@ export function batchCommands(deps: Deps) {
 
     // Applied without being asked: the report is the whole point of having sent the notes,
     // and clicking a command to ingest it is a step nobody wants to remember.
-    const applied = await applyReportFrom(target, true);
+    const applied = await applyReportFrom(target, true, sessionId);
 
     // A note Claude reported as done has served its purpose. Skipped notes and answered
     // questions stay: those still need reading.
@@ -363,7 +394,7 @@ export function batchCommands(deps: Deps) {
 
     // Nothing to say: no report to apply and nothing changed.
     if (notes.length === 0 && !changes) {
-      if (!external) void vscode.window.setStatusBarMessage(`Redline: ${target.label} finished`, 5000);
+      if (!external) void vscode.window.setStatusBarMessage(`Redline: ${target?.label ?? 'Claude'} finished`, 5000);
       return;
     }
     const summaryText = [notes.join(' · '), changes].filter(Boolean).join(' · ');
@@ -377,6 +408,16 @@ export function batchCommands(deps: Deps) {
     lastReportText = summaryText;
     lastReportTextAt = Date.now();
     logger.info(`run reported by ${source}: ${summaryText}`);
+    const behaviour = config.onRunFinished;
+    if (behaviour === 'nothing') return;
+
+    // The panel is the display, so it is brought forward either way — the notification is
+    // just what makes it noticeable when the panel is not the active view.
+    if (changes && behaviour === 'open') {
+      await reviewChanges();
+      return;
+    }
+
     const actions = [
       ...(changes ? ['Review changes'] : []),
       'Show notes',
@@ -392,12 +433,99 @@ export function batchCommands(deps: Deps) {
       });
   }
 
+  /** The run the hook last reported here, so the same one is never announced twice. */
+  let lastRunSeen = '';
+  /** Runs accepted from the hook — asserted by the tests, since a notification is not. */
+  let runsReported = 0;
+
+  /**
+   * A run finished, according to the hook.
+   *
+   * This is the path that works when the prompt did not come from Redline: someone typing in a
+   * Claude Code session — in a VS Code terminal, in iTerm, in tmux, anywhere — produces the
+   * same stop marker, and it carries the run's own timestamp and session id. Nothing here
+   * needs the session to be *reachable*: that is only required to push notes into it, and
+   * requiring it meant a run outside VS Code's own terminals was never reported at all.
+   *
+   * The marker's timestamp identifies the run, which is a better guard than any time window:
+   * the hook writes state for every repository under one directory, so a run finishing in
+   * another worktree is a signal here too, and its marker is not ours.
+   */
+  async function onHookRunFinished(): Promise<void> {
+    const root = await range.repoRoot();
+    if (!root) return;
+    const marker = await readStopMarker(root);
+    if (!marker) {
+      // A hook too old to record one. Fall back to the session-shaped path.
+      const target = await resolveTarget(deps.context, logger, { interactive: false });
+      if (target) await reportRunFinished(target, true, 'hook');
+      return;
+    }
+    if (marker.at === lastRunSeen) {
+      logger.trace(`run ${marker.at} already reported`);
+      return;
+    }
+    lastRunSeen = marker.at;
+    runsReported++;
+    // Only to read the terminal as a last-resort source for the report; its absence is fine.
+    const target = await resolveTarget(deps.context, logger, { interactive: false });
+    logger.info(
+      `hook reported a finished run at ${marker.at}` +
+        `${marker.session ? ` in session ${marker.session.slice(0, 8)}` : ''}` +
+        `${target ? ` (${target.label})` : ' (no reachable session — reporting anyway)'}`,
+    );
+    await reportRunFinished(target, true, 'hook', marker.session || undefined);
+  }
+
   async function onAgentFinished(target: SessionTarget): Promise<void> {
     await reportRunFinished(target, false);
   }
 
   async function onExternalRunFinished(target: SessionTarget, source: 'hook' | 'monitor' = 'monitor'): Promise<void> {
     await reportRunFinished(target, true, source);
+  }
+
+  /**
+   * Stage a batch for a session VS Code cannot reach, and return the word that fetches it.
+   *
+   * Typing into a terminal needs a terminal; the plugin's `UserPromptSubmit` hook needs
+   * nothing but a file. So the batch is written where the hook looks and the token goes on the
+   * clipboard: paste it into the session and the hook injects the whole review. Without this,
+   * a Claude Code session in iTerm or tmux could only be reviewed by pasting several kilobytes
+   * of prompt by hand — which is the failure the plugin exists to remove.
+   */
+  /** Whether the plugin is live here, so a batch can be staged for a session we cannot type into. */
+  async function hookCanCollect(): Promise<boolean> {
+    const root = await range.repoRoot();
+    return root ? (await deliveryToken(root)) !== undefined : false;
+  }
+
+  async function stageForUnreachableSession(text: string): Promise<string | undefined> {
+    const root = await range.repoRoot();
+    if (!root) return undefined;
+    const token = await deliveryToken(root);
+    if (!token) return undefined;
+    try {
+      await stageForHandover(root, text.trimEnd());
+      logger.info(`staged ${text.length} chars for a session outside VS Code; the token is "${token}"`);
+      return token;
+    } catch (err) {
+      logger.warn('could not stage the batch for the plugin', err);
+      return undefined;
+    }
+  }
+
+  /** The transcript for a session id, looked for in the directories it could belong to. */
+  async function namedSession(
+    sessionId: string,
+    cwds: readonly string[],
+  ): Promise<ClaudeSessionInfo | undefined> {
+    for (const cwd of cwds) {
+      if (!cwd) continue;
+      const found = (await findSessions(cwd)).find((s) => s.sessionId === sessionId);
+      if (found) return found;
+    }
+    return undefined;
   }
 
   async function pickSession(): Promise<void> {
@@ -541,5 +669,7 @@ export function batchCommands(deps: Deps) {
     showLog,
     onAgentFinished,
     onExternalRunFinished,
+    onHookRunFinished,
+    hookRunsReported: (): number => runsReported,
   };
 }

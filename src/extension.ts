@@ -46,6 +46,14 @@ export interface RedlineApi {
   activationMs(): number;
   /** The change range, so a test can exercise it against a real repository. */
   range: ReviewRange;
+  /**
+   * Runs the hook has reported here, and a way to drive that path directly.
+   *
+   * A notification cannot be asserted, and the thing worth asserting is that a run gets
+   * reported at all when there is no session VS Code can reach.
+   */
+  hookRuns(): number;
+  reportHookRun(): Promise<void>;
 }
 
 /** Wall time activation took, reported through the API so it can be asserted, not assumed. */
@@ -272,10 +280,10 @@ async function activateInner(
       signalCounts.ended++;
       range.invalidateBase();
       void cards.postSession();
-      void (async () => {
-        const target = await resolveTarget(context, logger, { interactive: false });
-        if (target) await batch.onExternalRunFinished(target, 'hook');
-      })();
+      // Deliberately not conditional on finding a session to send to. The hook's marker is
+      // the record that a run happened here, and it is written the same whether the prompt
+      // came from Redline or from someone typing in a Claude Code session in any terminal.
+      void batch.onHookRunFinished();
     }),
   );
   const attachMonitor = async (): Promise<void> => {
@@ -347,6 +355,8 @@ async function activateInner(
     hookSignals: () => ({ ...signalCounts }),
     activationMs: () => activationCost,
     range,
+    hookRuns: () => batch.hookRunsReported(),
+    reportHookRun: () => batch.onHookRunFinished(),
   };
 }
 

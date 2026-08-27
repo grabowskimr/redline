@@ -2,7 +2,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { readRunTrees } from '../../claude/runTrees';
+import { readRunTrees, readStopMarker } from '../../claude/runTrees';
 import { projectSlug } from '../../claude/transcripts';
 
 const A = 'a'.repeat(40);
@@ -63,5 +63,55 @@ describe('run trees recorded by the hook', () => {
 
   it('says nothing when the hook is not installed', async () => {
     assert.equal(await readRunTrees('/tmp/never/used', home), undefined);
+  });
+});
+
+describe('the marker a finished run leaves behind', () => {
+  let home: string;
+  let repo: string;
+  let dir: string;
+
+  beforeEach(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'lr-stop-'));
+    repo = '/tmp/some/repo';
+    dir = path.join(home, '.claude', 'redline', projectSlug(repo));
+    await fs.mkdir(dir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(home, { recursive: true, force: true });
+  });
+
+  const stopped = (body: unknown): Promise<void> =>
+    fs.writeFile(path.join(dir, 'stopped.json'), JSON.stringify(body), 'utf8');
+
+  it('names the run, the session and the tree it left', async () => {
+    await stopped({ at: '2026-08-27T12:00:00.000Z', session: 'abc-123', tree: B });
+    const marker = await readStopMarker(repo, home);
+    assert.equal(marker?.at, '2026-08-27T12:00:00.000Z');
+    assert.equal(marker?.session, 'abc-123');
+    assert.equal(marker?.tree, B);
+  });
+
+  it('still reports the run when the hook is too old to record a tree', async () => {
+    // Awareness must not depend on the newest hook: the run still happened.
+    await stopped({ at: '2026-08-27T12:00:00.000Z', session: 'abc-123' });
+    const marker = await readStopMarker(repo, home);
+    assert.equal(marker?.at, '2026-08-27T12:00:00.000Z');
+    assert.equal(marker?.tree, undefined);
+  });
+
+  it('tolerates a marker with no session', async () => {
+    await stopped({ at: '2026-08-27T12:00:00.000Z' });
+    assert.equal((await readStopMarker(repo, home))?.session, '');
+  });
+
+  it('is undefined when no run has finished, so nothing is reported', async () => {
+    assert.equal(await readStopMarker(repo, home), undefined);
+  });
+
+  it('rejects a marker with no usable timestamp, which cannot identify a run', async () => {
+    await stopped({ at: 'whenever', session: 'abc' });
+    assert.equal(await readStopMarker(repo, home), undefined);
   });
 });

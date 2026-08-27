@@ -4,6 +4,9 @@ import { TraceLevel } from './logger';
 
 export type OutputTemplate = 'claude-prompt' | 'json';
 
+/** What to do when a run finishes, wherever the prompt came from. */
+export type OnRunFinished = 'notify' | 'open' | 'nothing';
+
 /** True when the only value present is the package.json default — i.e. the user set nothing. */
 function isDefaultOnly<T>(i: { workspaceFolderValue?: T; workspaceValue?: T; globalValue?: T } | undefined): boolean {
   return (
@@ -95,6 +98,10 @@ export class Config implements vscode.Disposable {
   }
   get watchSessions(): boolean {
     return this.get('watchSessions', true);
+  }
+  get onRunFinished(): OnRunFinished {
+    const v = this.get<string>('onRunFinished', 'notify');
+    return v === 'open' || v === 'nothing' ? v : 'notify';
   }
   get excludeGlobs(): string[] {
     const v = this.get<unknown>('excludeGlobs', []);

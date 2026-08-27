@@ -124,6 +124,27 @@ tree — see below. Without it, the run is cut where the agent was idle longer t
 `redline.lastRunGapMinutes`, and files are dated by modification time, which cannot tell your
 own saves from the agent's work.
 
+## Prompts you type yourself
+
+Redline does not have to be the one that started the run. Every prompt goes through the
+plugin's hooks, so a request you type straight into a Claude Code session — in a VS Code
+terminal, in iTerm, in tmux, in any terminal at all — produces the same record of what
+changed, and the panel updates the same way.
+
+When the run stops you get **Claude finished — 4 files changed** with a **Review changes**
+button, and the panel's figures move with it. `redline.onRunFinished` decides what happens:
+`notify` (the default), `open` to go straight to the diff, or `nothing` to leave it to the
+panel.
+
+This used to depend on Redline finding a session it could *type into*, so a session running
+outside VS Code's own terminals was never reported at all — even though the hook had recorded
+the whole run. Knowing a run finished and being able to reach it are two different things, and
+only sending needs the second one.
+
+Sending still works in that case, from the other direction: Redline stages the batch where the
+hook looks and copies one short word — type `redline-review` into your session and the hook
+injects the whole review into its context. No pasting kilobytes into a terminal.
+
 ## The Claude Code plugin (optional)
 
 Redline works on its own. The plugin makes it exact and quiet:

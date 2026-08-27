@@ -13,6 +13,7 @@ import {
   NoteKind,
   ReviewNote,
 } from '../model/note';
+import { readStopMarker } from '../claude/runTrees';
 import { parseDroppedPaths } from '../dnd/dropPayload';
 import { ReviewStore } from '../store/reviewStore';
 import { NoteIndex } from './noteIndex';
@@ -213,6 +214,14 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     const here = targets.find((t) => t.inWorkspace && isReachable(t));
     if (here) this.range?.addCwdHint(here.cwd);
     if (!label) label = here?.label ?? '';
+    // A session Redline can see but not reach — Claude Code in iTerm, tmux, or any terminal
+    // outside this window. It still drives the change figures beside this label, and saying
+    // nothing made the panel look disconnected while it was tracking the run perfectly well.
+    if (!label) {
+      const outside = targets.find((t) => t.inWorkspace);
+      if (outside) label = `${outside.label} (outside VS Code)`;
+      else if (await this.hookIsLive()) label = 'Claude Code (via the plugin)';
+    }
     if (label) this.lastSessionLabel = label;
     const info: SessionInfo = {
       label: label || this.lastSessionLabel,
@@ -228,6 +237,16 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       if (summary.unavailable) info.changesUnavailable = true;
     }
     return info;
+  }
+
+  /**
+   * Whether the plugin has recorded a run in this repository. Enough to say Redline is
+   * connected to *something*, even with no process to point at — the session may have exited.
+   */
+  private async hookIsLive(): Promise<boolean> {
+    const root = await this.range?.repoRoot();
+    if (!root) return false;
+    return (await readStopMarker(root)) !== undefined;
   }
 
   private groups(): FileGroup[] {

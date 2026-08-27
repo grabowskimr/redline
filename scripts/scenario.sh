@@ -30,6 +30,10 @@ printf 'export const kept = 1\n' > src/kept.ts
 printf 'export const gone = 1\n' > src/gone.ts
 printf 'export const component = 1\n' > src/component.ts
 printf 'build/\n' > .gitignore
+# Committed rather than set at runtime: `getConfiguration().update()` writes this file into the
+# workspace, which changes the very working tree the assertions are about.
+mkdir -p .vscode
+printf '{\n  "redline.onRunFinished": "nothing"\n}\n' > .vscode/settings.json
 git add -A
 git commit -qm 'base'
 

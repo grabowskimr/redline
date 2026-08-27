@@ -28,6 +28,13 @@ describe('the run Claude just finished', function () {
     api = await ext.activate();
     root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
     assert.ok(root, 'a workspace folder is open');
+    // Reporting is what is under test, not what it chooses to show. The setting is committed
+    // in the fixture: updating it here would write into the working tree being asserted on.
+    assert.equal(
+      vscode.workspace.getConfiguration('redline').get('onRunFinished'),
+      'nothing',
+      'the fixture pins what happens on finish',
+    );
   });
 
   it('lists exactly what the run changed, and nothing from before it', async () => {
@@ -122,7 +129,11 @@ describe('the run Claude just finished', function () {
       api.range.invalidate(true);
       await api.range.summary();
     }
-    assert.equal(api.range.snapshotCount, quiet, 'no snapshots were taken while the tree sat still');
+    assert.equal(
+      api.range.snapshotCount,
+      quiet,
+      `no snapshots were taken while the tree sat still (was ${quiet}, now ${api.range.snapshotCount})`,
+    );
 
     // And it does notice a change, rather than serving the old tree forever.
     const probe = path.join(root, 'src', 'probe.ts');
@@ -142,6 +153,43 @@ describe('the run Claude just finished', function () {
     } finally {
       await fs.rm(probe, { force: true });
     }
+  });
+
+  it('reports a run that was started from the terminal, with no session it can reach', async () => {
+    // The scenario has no Claude Code process at all, which is the strict version of the case
+    // this exists for: someone typing in iTerm or tmux. Redline can never *send* there, but
+    // the run still happened and the hook recorded it — and for a long time that meant the
+    // whole thing went unreported, because reporting was gated on finding a session to send
+    // to. Nothing about knowing a run finished requires being able to reach it.
+    const state = process.env.REDLINE_SCENARIO_STATE;
+    assert.ok(state, 'the scenario passed its state directory');
+    const stopped = path.join(state, 'stopped.json');
+    const marker = JSON.parse(await fs.readFile(stopped, 'utf8')) as { at: string; tree?: string };
+
+    // A marker this window has not seen, so the assertion does not depend on whether an
+    // earlier test in this file already consumed the scenario's own.
+    const fresh = (offsetMs: number): Promise<void> =>
+      fs.writeFile(
+        stopped,
+        JSON.stringify({ ...marker, at: new Date(Date.parse(marker.at) + offsetMs).toISOString() }),
+        'utf8',
+      );
+    await fresh(60_000);
+    const before = api.hookRuns();
+    await api.reportHookRun();
+    assert.equal(api.hookRuns(), before + 1, 'the run was reported with no reachable session');
+
+    // And exactly once: the hook writes state for every repository under one directory, so a
+    // run finishing in another worktree signals here too.
+    await api.reportHookRun();
+    await api.reportHookRun();
+    assert.equal(api.hookRuns(), before + 1, 'the same run is not announced again');
+
+    // A genuinely new run is a new marker, and that one does get through.
+    await fresh(120_000);
+    await api.reportHookRun();
+    assert.equal(api.hookRuns(), before + 2, 'the next run was reported');
+    await fs.writeFile(stopped, JSON.stringify(marker), 'utf8');
   });
 
   it('walks only the lines this run touched', async () => {
