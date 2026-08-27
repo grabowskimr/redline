@@ -34,6 +34,13 @@ const WALK_ATTEMPTS = 5;
 /** A new file larger than this is not read just to count its lines. */
 const MAX_NEW_FILE_SCAN_BYTES = 2 * 1024 * 1024;
 
+/** What happened to a path between the base and now. Decides which sides a diff has. */
+type ChangeStatus =
+  | { kind: 'added' }
+  | { kind: 'deleted' }
+  | { kind: 'modified' }
+  | { kind: 'renamed'; from: string };
+
 /** Above this, a recomputation is worth explaining in the log. */
 const SLOW_SUMMARY_MS = 500;
 
@@ -150,6 +157,8 @@ export class ReviewRange implements vscode.Disposable {
   private reportedFailure: string | undefined;
   /** The run-start snapshot behind the current summary, if the hook provided one. */
   private snapshot: RunSnapshot | undefined;
+  /** Per-path status behind the current summary: which sides of a comparison exist. */
+  private statuses = new Map<string, ChangeStatus>();
   /** Untracked listing, reused until a file is created or deleted. */
   private untrackedCache: { at: number; files: string[] } | undefined;
   private untrackedDirty = true;
@@ -455,11 +464,15 @@ export class ReviewRange implements vscode.Disposable {
       // Both listings are independent reads, and a `git` spawn costs far more in latency
       // than in work — measured at ~0.18s each when run one after another.
       const [tracked, untrackedFiles] = await Promise.all([
-        // --name-only (not hunk parsing) so deletions, renames and mode changes all count.
-        this.changedSince(resolved.base),
+        // --name-status (not hunk parsing) so deletions, renames and mode changes all count,
+        // and so the diff knows which sides each path has.
+        this.changedSinceWithStatus(resolved.base),
         this.untracked(),
       ]);
-      for (const f of tracked) files.add(f);
+      this.statuses = tracked;
+      for (const f of tracked.keys()) files.add(f);
+      // Never tracked: an addition as far as any comparison is concerned.
+      for (const f of untrackedFiles) this.statuses.set(f, { kind: 'added' });
       // Files that were already untracked when a baseline was pinned are not part of the
       // snapshot, so they would otherwise show as "changed" forever. Hide them only while
       // they stay untouched: an edit after the pin is exactly what we want to review.
@@ -663,8 +676,37 @@ export class ReviewRange implements vscode.Disposable {
 
   /** Tracked paths that differ between `base` and the working tree (staged or not). */
   private async changedSince(base: string): Promise<string[]> {
-    const out = await this.run(['diff', '--name-only', '--no-color', base, '--']);
-    return out.split('\n').map((f) => f.trim()).filter(Boolean);
+    return [...(await this.changedSinceWithStatus(base)).keys()];
+  }
+
+  /**
+   * Changed paths and what happened to each: `A` added, `D` deleted, `R` renamed (with the
+   * path it came from), anything else modified.
+   *
+   * The status decides which sides of a comparison exist. Without it the diff was handed a
+   * git URI at the base for a file that was *added* since — a ref that has no such path — so
+   * the entry could not resolve and simply did not appear. Same shape of bug as handing it a
+   * missing path for a file that was deleted.
+   */
+  private async changedSinceWithStatus(base: string): Promise<Map<string, ChangeStatus>> {
+    const out = await this.run(['diff', '--name-status', '--no-color', base, '--']);
+    const map = new Map<string, ChangeStatus>();
+    for (const line of out.split('\n')) {
+      if (!line.trim()) continue;
+      const parts = line.split('\t');
+      const code = (parts[0] ?? '').trim();
+      // A rename is `R100<TAB>old<TAB>new`; everything else is `X<TAB>path`.
+      if (code.startsWith('R') && parts.length >= 3) {
+        const from = parts[1]?.trim();
+        const to = parts[2]?.trim();
+        if (to) map.set(to, from ? { kind: 'renamed', from } : { kind: 'added' });
+        continue;
+      }
+      const p = parts[1]?.trim();
+      if (!p) continue;
+      map.set(p, code.startsWith('A') ? { kind: 'added' } : code.startsWith('D') ? { kind: 'deleted' } : { kind: 'modified' });
+    }
+    return map;
   }
 
   /**
@@ -820,8 +862,17 @@ export class ReviewRange implements vscode.Disposable {
       const stored = snapshot && rel !== undefined ? snapshot.storedPath(rel) : undefined;
       const modified = gone.has(uri.toString()) ? undefined : uri;
       if (stored !== undefined) return [uri, vscode.Uri.file(stored), modified];
+
+      const status = rel !== undefined ? this.statuses.get(rel) : undefined;
+      // Added: nothing on the left, because the path does not exist at the base. Renamed: the
+      // left side is the path it came from, which does.
+      if (status?.kind === 'added') return [uri, undefined, modified];
       try {
-        original = api?.toGitUri(uri, summary.base);
+        const left =
+          status?.kind === 'renamed' && root
+            ? vscode.Uri.file(path.join(root, status.from))
+            : uri;
+        original = api?.toGitUri(left, summary.base);
       } catch {
         original = undefined;
       }

@@ -78,6 +78,15 @@ describe('against a real repository', () => {
       assert.ok(s, 'summary');
       console.log(`      recentSource=${s.recentSource} recent=${s.recentCount}/${s.fileCount}`);
       assert.ok(s.recent.includes(rel), `a brand-new file is missing from the last run (via ${s.recentSource})`);
+
+      // And it must have a diff pair the editor can actually open. A new file has nothing on
+      // the left; handing over a git URI for a path that does not exist at the base gives the
+      // multi-file diff a side it cannot resolve.
+      const pairs = await api.range.diffResources('recent');
+      const pair = pairs.find(([u]) => u.fsPath.endsWith(rel));
+      assert.ok(pair, 'the new file has a diff pair');
+      console.log(`      new file pair -> left: ${pair[1]?.toString() ?? 'none'}, right: ${pair[2] ? 'file' : 'none'}`);
+      assert.equal(pair[1], undefined, 'a new file has no left-hand side');
     } finally {
       await fs.rm(marker, { force: true });
     }
@@ -123,6 +132,38 @@ describe('against a real repository', () => {
       // Written back rather than checked out: a `git checkout` here competes for the index
       // lock with the extension's own git calls, and losing that race leaves the file deleted.
       await fs.writeFile(path.join(root, victim), before);
+    }
+  });
+
+  it('gives a renamed file the path it came from as its left side', async () => {
+    // A rename's new path does not exist at the base either, so it needs the *old* path on the
+    // left. Restored by moving it back, with no git write to race the extension's own calls.
+    const cp = await import('node:child_process');
+    const run = (args: string[]): string =>
+      cp.execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    const dirty = new Set(run(['diff', '--name-only', 'HEAD']).split('\n').map((l) => l.trim()));
+    const from = run(['ls-files'])
+      .split('\n')
+      .map((l) => l.trim())
+      .find((f) => f.endsWith('.ts') && !dirty.has(f) && !f.includes(' '));
+    assert.ok(from, 'a clean tracked file to move');
+    const to = `${from}.moved-by-test.ts`;
+
+    await fs.rename(path.join(root, from), path.join(root, to));
+    try {
+      const deadline = Date.now() + 30_000;
+      let pair: [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined] | undefined;
+      while (!pair && Date.now() < deadline) {
+        api.range.invalidateBase();
+        await api.range.summary();
+        pair = (await api.range.diffResources('all')).find(([u]) => u.fsPath.endsWith(to));
+        if (!pair) await new Promise((r) => setTimeout(r, 500));
+      }
+      assert.ok(pair, 'the moved file appears');
+      console.log(`      moved file pair -> left: ${pair[1] ? pair[1].scheme : 'none'}, right: ${pair[2] ? 'file' : 'none'}`);
+      assert.ok(pair[2], 'the new path is the right side');
+    } finally {
+      await fs.rename(path.join(root, to), path.join(root, from));
     }
   });
 

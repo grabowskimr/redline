@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 — 2026-08-27
+
+- Fixed: a file created during a run had no visible changes in the diff. It was in the change
+  list, but the multi-file editor was handed a git URI at the base ref for a path that does not
+  exist there, so the left side could not resolve and the entry did not render — the same shape
+  of bug as a deleted file being given a missing path on the right. Which sides a comparison has
+  now comes from `git diff --name-status`: an addition has no left side, a deletion no right
+  side, and a committed rename takes the path it came from as its left.
+
 ## 0.3.0 — 2026-08-27
 
 First build shared outside this machine. Everything below shipped together; 0.2.0 was never
