@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.2.0 — 2026-08-26
+## 0.3.0 — 2026-08-27
+
+First build shared outside this machine. Everything below shipped together; 0.2.0 was never
+distributed.
 
 - Fixed: prompts sent to an Orca terminal no longer carry `<ESC>[200~` at the head. Orca's
   `terminal send --text` types into the agent's input box, where newlines stay newlines and
