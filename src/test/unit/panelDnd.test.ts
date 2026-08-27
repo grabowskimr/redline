@@ -421,6 +421,17 @@ describe('rendering a card', () => {
     assert.doesNotMatch(html, /data-unshot/);
   });
 
+  it('reads as done and collapses once marked done', () => {
+    // pendingReply is cleared by the command when done is set, so the card settles.
+    const html = render({
+      id: 'n1', seq: 1, body: 'x', done: true,
+      sent: { changed: true, outcome: 'answered' }, attachments: [],
+    });
+    assert.match(html, /✅ done/, "your decision, not the agent's verdict");
+    assert.match(html, /class="card done settled/, 'dimmed and collapsed');
+    assert.match(html, /data-act="remove"/, 'and removable in one click');
+  });
+
   it('offers reopen, not mark-done, on a note already done', () => {
     // Offering ✓ there means the click undoes it — which reads as the button doing nothing.
     const html = render({

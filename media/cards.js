@@ -244,14 +244,16 @@
           .join('') +
         '</div>'
       : '';
+    // Your own decision outranks the agent's verdict: a note you marked done reads as done,
+    // whatever Claude reported about it.
     const status = n.pendingReply
       ? '✎ follow-up not sent'
+      : n.done
+      ? '✅ done'
       : n.awaiting
       ? '<span class="codicon codicon-loading codicon-modifier-spin"></span> waiting for Claude'
       : n.sent
       ? statusOf(n)
-      : n.done
-      ? '✓ done'
       : n.orphaned
       ? '⚠ stale'
       : '';

@@ -23,6 +23,14 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: **pressing done did nothing when a follow-up had been typed but not sent.** The card
+  cannot collapse while a turn is owed, so a note where you had typed "ok" stayed light,
+  went on reading "follow-up not sent", and only swapped its icon. Deciding you are finished
+  is exactly when an unsent turn stops mattering: marking done now settles the conversation.
+  The turn stays in the thread, and writing a new one reopens it.
+- Changed: a note you marked done reads **✅ done**, whatever Claude reported about it. Your
+  decision outranks its verdict — previously an answered question showed "not addressed yet"
+  after you had marked it done.
 - Changed: **Claude's answers are readable now.** The panel showed them as raw text, so a
   markdown link appeared as its label *followed by* its whole path, and a repository path has
   no spaces to wrap at — it pushed the card sideways. Links render as one short reference that

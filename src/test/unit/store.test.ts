@@ -304,3 +304,35 @@ describe('what counts as an unsent follow-up', () => {
     assert.equal(hasUnsentReply(store.getById(a.id)!), true, 'yours was never sent');
   });
 });
+
+describe('marking a note done', () => {
+  it('settles a conversation that still has a follow-up you never sent', () => {
+    // The reported bug: type "ok" as a follow-up, then press done, and nothing happened —
+    // the card could not collapse while an unsent turn existed, so done had no visible effect.
+    const store = makeStore();
+    const a = store.add(input());
+    store.markSent([a.id]);
+    store.update(a.id, { addenda: ['Claude: done — added the comment', 'ok'] });
+    assert.equal(hasUnsentReply(store.getById(a.id)!), true, 'yours is unsent');
+
+    // What the ✓ button does.
+    const note = store.getById(a.id)!;
+    store.update(note.id, { done: true, sent: { ...note.sent!, addendaAtSend: note.addenda.length } });
+
+    const after = store.getById(a.id)!;
+    assert.equal(after.done, true);
+    assert.equal(hasUnsentReply(after), false, 'nothing is owed once you are finished');
+    assert.equal(after.addenda.length, 2, 'the turns stay in the thread');
+  });
+
+  it('notices a follow-up written after it was marked done', () => {
+    const store = makeStore();
+    const a = store.add(input());
+    store.markSent([a.id]);
+    let note = store.getById(a.id)!;
+    store.update(note.id, { done: true, sent: { ...note.sent!, addendaAtSend: note.addenda.length } });
+    note = store.getById(a.id)!;
+    store.update(note.id, { addenda: [...note.addenda, 'actually, one more thing'] });
+    assert.equal(hasUnsentReply(store.getById(a.id)!), true, 'the conversation is live again');
+  });
+});

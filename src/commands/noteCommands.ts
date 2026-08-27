@@ -317,7 +317,19 @@ export function noteCommands(deps: Deps) {
       void vscode.window.showInformationMessage('Redline: no note selected.');
       return;
     }
-    store.update(note.id, { done: !note.done });
+    const done = !note.done;
+    const patch: Partial<ReviewNote> = { done };
+
+    // Marking a note done settles the conversation with it.
+    //
+    // A follow-up you typed and never sent otherwise keeps the note live for ever: the card
+    // could not collapse, the status went on reading "follow-up not sent", and pressing done
+    // looked like it did nothing. Deciding you are finished is exactly the case where an
+    // unsent turn stops mattering — it stays in the thread, it just no longer counts as owed.
+    if (done && note.sent) {
+      patch.sent = { ...note.sent, addendaAtSend: note.addenda.length };
+    }
+    store.update(note.id, patch);
   }
 
   // ── kinds ────────────────────────────────────────────────────────────
