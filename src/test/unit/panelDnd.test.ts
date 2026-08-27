@@ -438,3 +438,55 @@ describe('rendering a card', () => {
     assert.match(pending, /data-act="send"/);
   });
 });
+
+describe('rendering what Claude wrote', () => {
+  const render = (addenda: string[]): string => {
+    const h = harness();
+    h.fire('message', {
+      data: {
+        type: 'notes',
+        groups: [
+          {
+            base: 'a.ts',
+            dir: 'src',
+            notes: [{ id: 'n1', seq: 1, kind: 'comment', kindIcon: 'comment', where: 'L1', body: 'x', addenda }],
+          },
+        ],
+        sent: [],
+        kinds: [],
+      },
+    });
+    return h.root.innerHTML;
+  };
+
+  it('turns a markdown link into one clickable reference, not a label plus a long path', () => {
+    // The raw form showed both, and a repository path is long enough to push the card sideways.
+    const html = render(['Claude: moved it into [QuestionNavigation.styles.tsx:21](domains/hr/libs/grow/x.tsx)']);
+    assert.match(html, /data-open="domains\/hr\/libs\/grow\/x\.tsx"/);
+    assert.match(html, />QuestionNavigation\.styles\.tsx:21</);
+    assert.doesNotMatch(html, /\]\(domains/, 'no markdown syntax left on screen');
+  });
+
+  it('renders backticked code as code', () => {
+    assert.match(render(['Claude: dropped the `styled-components` import']), /<code>styled-components<\/code>/);
+  });
+
+  it('labels the speaker instead of leaving "Claude:" in the sentence', () => {
+    const html = render(['Claude: did the thing']);
+    assert.match(html, /class="who">Claude</);
+    assert.doesNotMatch(html, /Claude: did the thing/);
+  });
+
+  it('leaves your own turns unlabelled', () => {
+    const html = render(['not quite — put it above']);
+    assert.doesNotMatch(html, /class="who"/);
+    assert.match(html, /not quite/);
+  });
+
+  it('escapes before it renders, so markup in the text stays text', () => {
+    const html = render(['Claude: careful with <script>alert(1)</script> and [x](y)']);
+    assert.doesNotMatch(html, /<script>/);
+    assert.match(html, /&lt;script&gt;/);
+    assert.match(html, /data-open="y"/, 'the link still renders');
+  });
+});

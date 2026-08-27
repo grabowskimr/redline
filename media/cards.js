@@ -148,6 +148,25 @@
     );
   }
 
+  const AGENT_PREFIX = 'Claude:';
+
+  /**
+   * The small slice of markdown an agent actually writes in a sentence about its own work:
+   * `[label](target)` and `` `code` ``.
+   *
+   * Rendered rather than escaped because the raw form is what made these unreadable — a link
+   * showed its label *and* its whole path, and a repository path is long enough to push the
+   * card sideways. Escaped first, so nothing here can inject markup; only the two shapes
+   * below are turned back into elements.
+   */
+  function inlineMarkdown(text) {
+    return esc(text)
+      .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_m, label, target) =>
+        '<a class="ref" data-open="' + target + '" title="' + target + '">' + label + '</a>',
+      )
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  }
+
   /** One footer button. Keeps the action row readable instead of a chain of ternaries. */
   const btn = (act, glyph, title, cls) =>
     '<button data-act="' +
@@ -187,14 +206,19 @@
         ? codeBox('suggestion', 'suggested change', n.suggestion, 'suggest')
         : '';
     const addenda = (n.addenda || [])
-      .map(
-        (a) =>
+      .map((a) => {
+        const raw = String(a);
+        const agent = raw.startsWith(AGENT_PREFIX);
+        const text = agent ? raw.slice(AGENT_PREFIX.length).trim() : raw;
+        return (
           '<div class="addendum' +
-          (String(a).startsWith('Claude:') ? ' agent' : '') +
+          (agent ? ' agent' : '') +
           '">' +
-          esc(a) +
-          '</div>',
-      )
+          (agent ? '<span class="who">Claude</span>' : '') +
+          inlineMarkdown(text) +
+          '</div>'
+        );
+      })
       .join('');
     const shots = (n.attachments || []).length
       ? '<div class="shots">' +
@@ -476,6 +500,11 @@
     }
     if (shot) {
       post({ type: 'openAttachment', text: shot.dataset.shot });
+      return;
+    }
+    const ref = e.target.closest('[data-open]');
+    if (ref) {
+      post({ type: 'openPath', text: ref.dataset.open });
       return;
     }
     const global = e.target.closest('[data-global]');

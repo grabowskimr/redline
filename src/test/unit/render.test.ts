@@ -204,7 +204,7 @@ describe('claude-prompt formatter (default)', () => {
     // The format asks for a sentence with every outcome: the line is kept beside the note as
     // Claude's side of the conversation, and a bare "done" leaves nothing to read there.
     assert.ok(text.includes('`#<number> done — <what you changed>`'));
-    assert.match(text, /Say what you actually did in each line/);
+    assert.match(text, /Keep each line to one sentence/);
     assert.equal(parseReport(text).length, 0, 'the footer itself must not parse as a report');
   });
 

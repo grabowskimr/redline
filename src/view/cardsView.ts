@@ -387,6 +387,13 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       case 'removeAttachment':
         if (m.id && m.text && this.attachments) await this.attachments.remove(m.id, m.text);
         break;
+      case 'openPath': {
+        // A reference out of Claude's own sentence, so the target is text it wrote: resolved
+        // against the workspace and opened only if it lands inside one. `file.ts:17` jumps to
+        // the line.
+        if (m.text) await this.openReference(m.text);
+        break;
+      }
       case 'openAttachment': {
         // Only a path some note actually holds. The message is data from a webview, not an
         // instruction to open an arbitrary file, and `remove` already applies the same rule.
@@ -400,6 +407,41 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         break;
       }
     }
+  }
+
+  /**
+   * Open a file Claude referred to, at its line if it gave one.
+   *
+   * Paths come from the agent's prose, so they are treated as untrusted: relative ones are
+   * resolved against each workspace folder and anything that escapes them is refused.
+   */
+  private async openReference(target: string): Promise<void> {
+    const match = /^(.*?)(?::(\d+))?(?::\d+)?$/.exec(target.trim());
+    const rawPath = match?.[1] ?? target.trim();
+    const line = match?.[2] ? Math.max(0, Number(match[2]) - 1) : undefined;
+    if (!rawPath || /^[a-z][a-z0-9+.-]*:\/\//i.test(rawPath)) {
+      this.logger.warn(`ignored a reference that is not a workspace path: ${target}`);
+      return;
+    }
+
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const root = folder.uri.fsPath;
+      const resolved = path.resolve(root, rawPath);
+      if (resolved !== root && !resolved.startsWith(root + path.sep)) continue;
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolved));
+        const editor = await vscode.window.showTextDocument(doc, { preview: true });
+        if (line !== undefined) {
+          const at = new vscode.Position(Math.min(line, Math.max(0, doc.lineCount - 1)), 0);
+          editor.selection = new vscode.Selection(at, at);
+          editor.revealRange(new vscode.Range(at, at), vscode.TextEditorRevealType.InCenter);
+        }
+        return;
+      } catch {
+        // not in this folder; try the next
+      }
+    }
+    void vscode.window.showInformationMessage(`Redline: could not find ${rawPath} in this workspace.`);
   }
 
   /**

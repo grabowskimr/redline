@@ -96,9 +96,10 @@ export function claudePrompt(m: RenderModel): string {
       'Reply with one line per note so I can track it, using exactly this format:',
       '`#<number> done — <what you changed>` · `#<number> skipped — <why>` · `#<number> answer: <your answer>`',
       '',
-      'Say what you actually did in each line, briefly — the line is kept beside the note as ' +
-        'your side of the conversation, and "done" on its own leaves nothing to read next to ' +
-        'code that has changed.',
+      'Keep each line to one sentence. It is shown beside the note in a narrow panel, so say ' +
+        'what changed and stop — "done" alone leaves nothing to read next to code that moved, ' +
+        'and three paragraphs are worse than one line. Point at code as ' +
+        '`[file.ts:12](path/to/file.ts)`, which is rendered as a short link.',
       '',
     );
   }

@@ -255,11 +255,44 @@ body {
 }
 
 .addendum {
-  padding: 0 10px 2px 24px;
+  padding: 1px 10px 3px 24px;
   white-space: pre-wrap;
+  /* A repository path has no spaces to break at, so without this it pushes the card sideways. */
+  overflow-wrap: anywhere;
   opacity: 0.85;
   position: relative;
-  line-height: 1.45;
+  line-height: 1.5;
+}
+/* Who is speaking, as a label rather than a "Claude:" buried in the sentence. */
+.addendum .who {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 0.82em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: 1px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+/* A file reference: reads as its label, opens on click, full path in the tooltip. */
+.addendum .ref {
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+.addendum .ref:hover {
+  color: var(--vscode-textLink-activeForeground);
+  border-bottom-style: solid;
+}
+.addendum code {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.92em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.18));
 }
 .addendum::before {
   content: '↳';
@@ -268,7 +301,7 @@ body {
   opacity: 0.5;
 }
 .addendum.agent {
-  color: var(--vscode-charts-blue);
+  opacity: 1;
 }
 
 /* screenshots */
