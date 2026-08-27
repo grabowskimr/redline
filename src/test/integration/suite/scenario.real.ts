@@ -111,6 +111,39 @@ describe('the run Claude just finished', function () {
     }
   });
 
+  it('takes no snapshot at all while nothing is changing, and one when something does', async () => {
+    // Every snapshot walks the whole working tree — over a second in a large repository — so
+    // an open window that is doing nothing must not be paying for it. The rule is that a tree
+    // nothing has changed since is not stale, however old it is.
+    await api.range.summary();
+    const quiet = api.range.snapshotCount;
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 1500)); // longer than the pacing window
+      api.range.invalidate(true);
+      await api.range.summary();
+    }
+    assert.equal(api.range.snapshotCount, quiet, 'no snapshots were taken while the tree sat still');
+
+    // And it does notice a change, rather than serving the old tree forever.
+    const probe = path.join(root, 'src', 'probe.ts');
+    await fs.writeFile(probe, 'export const probe = 1\n', 'utf8');
+    try {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        api.range.invalidate(true);
+        const s = await api.range.summary();
+        if (s?.recent.includes('src/probe.ts')) break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      const s = await api.range.summary();
+      assert.ok(s?.recent.includes('src/probe.ts'), 'the new file turned up in the last run');
+      assert.ok(api.range.snapshotCount > quiet, 'which took a snapshot');
+      console.log(`      snapshots: ${quiet} while idle, ${api.range.snapshotCount} after a write`);
+    } finally {
+      await fs.rm(probe, { force: true });
+    }
+  });
+
   it('walks only the lines this run touched', async () => {
     const hunks = await api.range.hunks();
     const component = hunks.filter((h) => h.uri.fsPath.endsWith('src/component.ts'));

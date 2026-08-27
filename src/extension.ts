@@ -10,6 +10,7 @@ import { emptyState } from './model/schema';
 import { isOpen, ReviewNote } from './model/note';
 import { GitService } from './git/gitApi';
 import { registerEmptySideProvider, ReviewRange } from './git/reviewRange';
+import { sweepScratchIndexes } from './git/snapshotTree';
 import { registerTreeSideProvider } from './git/treeSide';
 import { CommentHost } from './comments/commentHost';
 import { NoteIndex } from './view/noteIndex';
@@ -138,6 +139,8 @@ async function activateInner(
   const attachments = new Attachments(context, store, logger);
   const watcher = new SessionWatcher(logger);
   context.subscriptions.push(index, host, range, watcher, registerEmptySideProvider(), registerTreeSideProvider(gitIn));
+  // Housekeeping for snapshots a killed window could not clean up after itself.
+  void sweepScratchIndexes();
   void attachments.cleanupOrphans();
 
   // ── UI ───────────────────────────────────────────────────────────────

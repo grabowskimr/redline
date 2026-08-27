@@ -10,8 +10,8 @@ import { parseDiffByFile, parseHunks } from './hunks';
 import { RUN_GRACE_MS, selectRunFiles } from './runFiles';
 import { touchedPathsSince } from '../claude/touched';
 import { differsFromSnapshot, readSnapshot, RunSnapshot } from '../claude/snapshot';
-import { readRunTrees, RunTree } from '../claude/runTrees';
-import { GitRunner, snapshotWorkingTree, treeChanges, TreeChange } from './snapshotTree';
+import { readRunTrees, RunTree, RunTrees } from '../claude/runTrees';
+import { binaryPaths, GitRunner, snapshotWorkingTree, treeChanges, TreeChange } from './snapshotTree';
 import { treeSide } from './treeSide';
 
 const execFileP = promisify(execFile);
@@ -92,6 +92,19 @@ const BASE_CACHE_MS = 4_000;
  * costs nothing to read, so this only paces the panel while the agent is still writing.
  */
 const TREE_CACHE_MS = 4_000;
+
+/** Beyond this a snapshot is not worth waiting for, and the older signals cover the gap. */
+const SNAPSHOT_TIMEOUT_MS = 30_000;
+
+/**
+ * How long a snapshot is trusted once the working tree is known to have moved on.
+ *
+ * A tree nothing has changed since is not stale at all, however old it is — which is the
+ * common case, and why an idle window takes no snapshots. This only bounds the other
+ * direction: if snapshotting starts failing, an answer that is quietly out of date is worse
+ * than falling back to signals that correct themselves.
+ */
+const TREE_STALE_MS = 60_000;
 
 /**
  * A gap longer than this between two file modifications starts a new "run". Long enough
@@ -201,8 +214,10 @@ export class ReviewRange implements vscode.Disposable {
   /** Our own snapshot of the working tree, and when it was taken. */
   private treeSnap: { at: number; tree: string } | undefined;
   private treeInFlight: Promise<void> | undefined;
-  /** The hook's end-of-run snapshot, when it has written one for the current run. */
-  private hookAfter: RunTree | undefined;
+  /** When the working tree last changed, so a snapshot can be known to still describe it. */
+  private lastChangeAt = 0;
+  private binaryCache: { key: string; paths: Set<string> } | undefined;
+  private snapshots = 0;
   /** Untracked listing, reused until a file is created or deleted. */
   private untrackedCache: { at: number; files: string[] } | undefined;
   private untrackedDirty = true;
@@ -226,11 +241,13 @@ export class ReviewRange implements vscode.Disposable {
       // Build output and VCS internals churn constantly while an agent works; recomputing
       // the range for those would keep the panel busy for no benefit.
       if (IGNORED_PATH.test(uri.path)) return;
+      this.lastChangeAt = Date.now();
       this.invalidateSoon();
     };
     // Editing a file cannot change which files are untracked; creating or deleting one can.
     const onFsAddOrRemove = (uri: vscode.Uri): void => {
       if (IGNORED_PATH.test(uri.path)) return;
+      this.lastChangeAt = Date.now();
       this.untrackedDirty = true;
       this.invalidateSoon();
     };
@@ -248,7 +265,7 @@ export class ReviewRange implements vscode.Disposable {
 
   // ── git plumbing ──────────────────────────────────────────────────────
 
-  private async run(args: string[], env?: Record<string, string>): Promise<string> {
+  private async run(args: string[], env?: Record<string, string>, timeoutMs?: number): Promise<string> {
     const root = await this.repoRoot();
     if (!root) throw new Error('not a git repository');
     // core.quotePath is on by default, which would return `"caf\303\251.ts"` for
@@ -257,13 +274,20 @@ export class ReviewRange implements vscode.Disposable {
       cwd: root,
       env: env ? { ...process.env, ...env } : process.env,
       maxBuffer: 32 * 1024 * 1024,
+      ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
     });
     return stdout;
   }
 
-  /** The runner shape the snapshot helpers take. */
+  /**
+   * The runner shape the snapshot helpers take.
+   *
+   * Bounded, unlike the rest: staging the working tree is the one call here that walks every
+   * file, and a `git` that never returns would otherwise leave the snapshot permanently in
+   * flight — which reads as "the tree has not changed" rather than as a failure.
+   */
   private get runner(): GitRunner {
-    return (args, env) => this.run(args, env);
+    return (args, env) => this.run(args, env, SNAPSHOT_TIMEOUT_MS);
   }
 
   /** The repository root — `git diff` prints paths relative to it, not to the open folder. */
@@ -619,9 +643,10 @@ export class ReviewRange implements vscode.Disposable {
     if (!resolved.run) return undefined;
     const root = await this.repoRoot();
     if (!root) return undefined;
-    const before = await this.beforeTree(root, resolved.run);
+    const trees = await this.runTrees(root, resolved.run);
+    const before = trees?.before;
     if (!before) return undefined;
-    const now = await this.currentTree(root, Date.parse(before.at));
+    const now = await this.currentTree(root, Date.parse(before.at), trees?.after);
     if (!now) return undefined;
 
     let all: Map<string, ChangeStatus>;
@@ -692,7 +717,7 @@ export class ReviewRange implements vscode.Disposable {
    * failure this mechanism exists to prevent. The hook writes it and the transcript records
    * the same moment, so the tolerance only absorbs clock jitter.
    */
-  private async beforeTree(root: string, run: { since: string }): Promise<RunTree | undefined> {
+  private async runTrees(root: string, run: { since: string }): Promise<RunTrees | undefined> {
     let trees = await readRunTrees(root);
     if (!trees) {
       for (const cwd of [...this.cwdHints].slice(-MAX_CWD_HINTS)) {
@@ -700,7 +725,6 @@ export class ReviewRange implements vscode.Disposable {
         if (trees) break;
       }
     }
-    this.hookAfter = trees?.after;
     const before = trees?.before;
     if (!before) return undefined;
     const snapAt = Date.parse(before.at);
@@ -711,7 +735,7 @@ export class ReviewRange implements vscode.Disposable {
       );
       return undefined;
     }
-    return before;
+    return trees;
   }
 
   /**
@@ -725,8 +749,7 @@ export class ReviewRange implements vscode.Disposable {
    * to hold a refresh for. When there is no tree at all yet, this returns nothing and the
    * summary falls back to the older signals until one lands.
    */
-  private async currentTree(root: string, runStartedAt: number): Promise<string | undefined> {
-    const after = this.hookAfter;
+  private async currentTree(root: string, runStartedAt: number, after: RunTree | undefined): Promise<string | undefined> {
     const afterAt = after ? Date.parse(after.at) : Number.NaN;
     // Only if it belongs to *this* run: while the agent is working, the newest stop marker is
     // the previous run's, and reading it as "now" would report that this run changed nothing.
@@ -735,17 +758,42 @@ export class ReviewRange implements vscode.Disposable {
       this.treeSnap = { at: afterAt, tree: after.tree };
       return after.tree;
     }
-    if (this.treeSnap && Date.now() - this.treeSnap.at < TREE_CACHE_MS) return this.treeSnap.tree;
+    const snap = this.treeSnap;
+    if (snap) {
+      const age = Date.now() - snap.at;
+      // Nothing has changed since it was taken, so it is not merely fresh — it is exact.
+      // This is what keeps an idle window from snapshotting at all. The time limit is the
+      // same safety net the untracked listing has, in case a watcher event was missed.
+      if (this.lastChangeAt <= snap.at && age < UNTRACKED_TTL_MS) return snap.tree;
+      // Changed, but too recently to be worth another walk: pace it.
+      if (age < TREE_CACHE_MS) return snap.tree;
+      void this.refreshTree(root);
+      // Serve the previous tree while the new one is taken, but not indefinitely: past this
+      // the answer would be quietly wrong, and the older signals are self-correcting.
+      return age < TREE_STALE_MS ? snap.tree : undefined;
+    }
     void this.refreshTree(root);
-    return this.treeSnap?.tree;
+    return undefined;
+  }
+
+  /**
+   * How many snapshots have been taken. Each one walks the working tree, so this is the
+   * number to watch if the panel ever feels expensive — and what the tests assert stays at
+   * zero while nothing changes.
+   */
+  get snapshotCount(): number {
+    return this.snapshots;
   }
 
   /** One snapshot at a time; re-renders if the tree actually moved. */
   private async refreshTree(root: string): Promise<void> {
     if (this.treeInFlight) return this.treeInFlight;
+    this.snapshots++;
     this.treeInFlight = (async () => {
       const started = Date.now();
-      const tree = await snapshotWorkingTree(root, this.runner);
+      const tree = await snapshotWorkingTree(root, this.runner, (why) =>
+        this.logger.warn(`could not snapshot the working tree: ${why}`),
+      );
       if (!tree) return;
       const moved = tree !== this.treeSnap?.tree;
       this.treeSnap = { at: started, tree };
@@ -1050,6 +1098,15 @@ export class ReviewRange implements vscode.Disposable {
     return files.map((f) => vscode.Uri.file(path.join(root, f)));
   }
 
+  /** Binary paths for one comparison, remembered so opening a diff twice costs one call. */
+  private async binaryIn(from: string, to: string): Promise<Set<string>> {
+    const key = `${from}..${to}`;
+    if (this.binaryCache?.key === key) return this.binaryCache.paths;
+    const paths = await binaryPaths(from, to, this.runner);
+    this.binaryCache = { key, paths };
+    return paths;
+  }
+
   /** Left/right pairs for VS Code's multi-file diff editor. */
   async diffResources(scope: 'recent' | 'all' = 'all'): Promise<Array<[vscode.Uri, vscode.Uri, vscode.Uri]>> {
     const summary = await this.summary();
@@ -1065,6 +1122,8 @@ export class ReviewRange implements vscode.Disposable {
     if (trees && trees.base === summary.base && root) {
       const left = scope === 'recent' ? trees.before : summary.base;
       const statuses = scope === 'recent' ? this.runStatuses : this.statuses;
+      // Only asked when a diff is actually opened, not on every refresh.
+      const binary = await this.binaryIn(left, trees.now);
       return uris.map((uri) => {
         const rel = path.relative(root, uri.fsPath);
         const status = statuses.get(rel);
@@ -1072,6 +1131,20 @@ export class ReviewRange implements vscode.Disposable {
         // document, which reads as the whole file arriving. Nothing to special-case.
         const from = status?.kind === 'renamed' ? status.from : rel;
         const modified = status?.kind === 'deleted' ? emptySide(uri) : uri;
+        // An image cannot be served as text. Compared against the base instead, where the git
+        // extension has a resource the editor can load properly, and against nothing when it
+        // is new — the same as before snapshots existed.
+        if (binary.has(from) || binary.has(rel)) {
+          let original: vscode.Uri | undefined;
+          if (status?.kind !== 'added') {
+            try {
+              original = api?.toGitUri(vscode.Uri.file(path.join(root, from)), summary.base);
+            } catch {
+              original = undefined;
+            }
+          }
+          return [uri, original ?? emptySide(uri), modified] as [vscode.Uri, vscode.Uri, vscode.Uri];
+        }
         return [uri, treeSide(root, left, from), modified] as [vscode.Uri, vscode.Uri, vscode.Uri];
       });
     }
@@ -1122,7 +1195,7 @@ export class ReviewRange implements vscode.Disposable {
     if (this.hunkCache?.base === key) return this.hunkCache.hunks;
     const startedAt = Date.now();
     const out: Hunk[] = [];
-    const fromSnapshot = new Set<string>();
+    const fromRun = new Set<string>();
     try {
       // The run's own lines, from the tree recorded when its request was submitted. One diff
       // for every file at once, against a snapshot rather than a directory of copies.
@@ -1132,7 +1205,7 @@ export class ReviewRange implements vscode.Disposable {
           const runDiff = await this.run(['diff', '-U0', '--no-color', this.treeState.before, '--']);
           for (const file of parseDiffByFile(runDiff)) {
             if (!recent.has(file.path)) continue;
-            fromSnapshot.add(file.path);
+            fromRun.add(file.path);
             for (const h of file.hunks) {
               const hunk: Hunk = { uri: vscode.Uri.file(path.join(root, file.path)), start: h.start, end: h.end };
               if (h.deletion) hunk.deletion = true;
@@ -1166,7 +1239,7 @@ export class ReviewRange implements vscode.Disposable {
         );
         for (const r of results) {
           if (!r) continue;
-          fromSnapshot.add(r.rel);
+          fromRun.add(r.rel);
           for (const range of r.ranges) {
             out.push({ uri: vscode.Uri.file(path.join(root, r.rel)), start: range.start, end: range.end });
           }
@@ -1175,7 +1248,7 @@ export class ReviewRange implements vscode.Disposable {
 
       const diff = await this.run(['diff', '-U0', '--no-color', summary.base, '--']);
       for (const file of parseDiffByFile(diff)) {
-        if (fromSnapshot.has(file.path)) continue; // already covered, more precisely
+        if (fromRun.has(file.path)) continue; // already covered, more precisely
         for (const h of file.hunks) {
           const hunk: Hunk = { uri: vscode.Uri.file(path.join(root, file.path)), start: h.start, end: h.end };
           if (h.deletion) hunk.deletion = true;

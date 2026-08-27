@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { EMPTY_TREE, GitRunner, snapshotWorkingTree, treeChanges } from '../../git/snapshotTree';
+import { binaryPaths, EMPTY_TREE, GitRunner, snapshotWorkingTree, treeChanges } from '../../git/snapshotTree';
 
 const execFileP = promisify(execFile);
 
@@ -114,6 +114,58 @@ describe('working-tree snapshots', () => {
     } finally {
       await fs.rm(fresh, { recursive: true, force: true });
     }
+  });
+
+  it('names the files git will not diff as text, so they are never served as text', async () => {
+    const before = await snapshotWorkingTree(repo, git);
+    assert.ok(before);
+    // A PNG header and some bytes git will refuse to treat as text.
+    await fs.writeFile(path.join(repo, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3, 0]));
+    await write('edited.ts', 'export const edited = 2\n');
+    const after = await snapshotWorkingTree(repo, git);
+    assert.ok(after);
+    const binary = await binaryPaths(before, after, git);
+    assert.deepEqual([...binary], ['logo.png'], 'the image, and not the source file beside it');
+  });
+
+  it('still produces a tree when a file vanishes while it is being staged', async () => {
+    // `git add --ignore-errors` continues past a file it cannot read but still exits non-zero,
+    // which is routine while an agent is moving files around. Abandoning the snapshot there
+    // would fail exactly when the tree is changing fastest.
+    await write('doomed.ts', 'export const doomed = 1\n');
+    const flaky: GitRunner = async (args, env) => {
+      if (args[0] === 'add') {
+        await git(args, env);
+        const err = new Error("warning: could not open 'doomed.ts'") as Error & { code?: number };
+        err.code = 1;
+        throw err;
+      }
+      return git(args, env);
+    };
+    const tree = await snapshotWorkingTree(repo, flaky);
+    assert.ok(tree, 'a tree was still written');
+    const changes = await treeChanges('HEAD', tree, git);
+    assert.deepEqual([...changes.keys()], ['doomed.ts'], 'with everything that did stage');
+  });
+
+  it('runs two snapshots at once without them fighting over a scratch index', async () => {
+    // A shared scratch index means `git add` locks it and the second caller fails outright.
+    // Two windows on one repository is the ordinary case, and a mid-run refresh beside a
+    // manual one is the awkward one.
+    const scratch = (): Promise<string[]> =>
+      fs.readdir(os.tmpdir()).then((f) => f.filter((n) => n.startsWith('redline-') && n.includes('.index')));
+    const before = new Set(await scratch());
+    const [a, b, c] = await Promise.all([
+      snapshotWorkingTree(repo, git),
+      snapshotWorkingTree(repo, git),
+      snapshotWorkingTree(repo, git),
+    ]);
+    assert.ok(a && b && c, 'all three produced a tree');
+    assert.equal(a, b);
+    assert.equal(b, c, 'and agree, because the tree did not move');
+    // Only ours: the temp directory is shared, and a live editor window keeps its own.
+    const left = (await scratch()).filter((f) => !before.has(f));
+    assert.deepEqual(left, [], 'and left no scratch indexes behind');
   });
 
   it('gives no answer rather than a wrong one when git cannot help', async () => {

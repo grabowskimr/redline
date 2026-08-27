@@ -8,6 +8,7 @@
 # a throwaway instead.
 set -e
 ROOT="${TMPDIR:-/tmp}/redline-scenario-$$"
+IDX="${TMPDIR:-/tmp}/redline-scenario-idx-$$"
 mkdir -p "$ROOT"
 # Resolved: TMPDIR carries a trailing slash and /var is a symlink to /private/var on macOS,
 # and the hook's state directory is keyed by the path git itself reports.
@@ -15,6 +16,10 @@ ROOT=$(cd "$ROOT" && pwd -P)
 SLUG=$(printf '%s' "$ROOT" | sed 's/[^A-Za-z0-9-]/-/g')
 STATE="$HOME/.claude/redline/$SLUG"
 TRANSCRIPT="$HOME/.claude/projects/$SLUG"
+# On a trap, not at the end: `set -e` skips the tail when the suite fails, and this writes
+# into ~/.claude, where leftovers from a failed run would be read by the real extension.
+cleanup() { rm -rf "$ROOT" "$STATE" "$TRANSCRIPT" "$IDX"; }
+trap cleanup EXIT INT TERM
 mkdir -p "$ROOT/src" "$STATE" "$TRANSCRIPT"
 cd "$ROOT"
 git init -q .
@@ -29,7 +34,6 @@ git add -A
 git commit -qm 'base'
 
 snapshot() {
-  IDX="${TMPDIR:-/tmp}/redline-scenario-idx-$$"
   cp "$(git rev-parse --git-path index)" "$IDX"
   GIT_INDEX_FILE="$IDX" git add -A --ignore-errors --
   GIT_INDEX_FILE="$IDX" git write-tree
@@ -58,6 +62,3 @@ printf '{"at":"%s","session":"scenario","tree":"%s"}\n' "$STOPPED" "$(snapshot)"
 echo "scenario repository: $ROOT"
 cd - >/dev/null
 REDLINE_TEST_WORKSPACE="$ROOT" REDLINE_SCENARIO=1 REDLINE_SCENARIO_STATE="$STATE" npm run test:real
-status=$?
-rm -rf "$ROOT" "$STATE" "$TRANSCRIPT" "${TMPDIR:-/tmp}/redline-scenario-idx-$$"
-exit $status

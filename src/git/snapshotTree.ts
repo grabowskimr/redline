@@ -53,9 +53,20 @@ export type GitRunner = (args: string[], env?: Record<string, string>) => Promis
  * copy of the repository's own — git's stat cache does the work. So the real index is copied
  * first, every time, and this file is only ever scratch.
  */
+let sequence = 0;
+
+/**
+ * A scratch index, unique to this call.
+ *
+ * `git add` takes a `.lock` beside whichever index it is given, so a shared path means two
+ * snapshots at once — two windows on one repository, or a second caller in this process — and
+ * one of them fails with "Another git process seems to be running in this repository". There
+ * is nothing to gain from sharing it either: the repository's own index is copied over it
+ * every time, so it carries nothing between calls. Unique per call, and removed afterwards.
+ */
 function shadowIndexPath(root: string): string {
   const id = createHash('sha1').update(root).digest('hex').slice(0, 16);
-  return path.join(os.tmpdir(), `redline-${id}.index`);
+  return path.join(os.tmpdir(), `redline-${id}-${process.pid}-${sequence++}.index`);
 }
 
 /**
@@ -64,7 +75,11 @@ function shadowIndexPath(root: string): string {
  * Undefined on any failure, which every caller treats as "no snapshot available" and falls
  * back to the older signals. Nothing here is worth breaking the panel over.
  */
-export async function snapshotWorkingTree(root: string, run: GitRunner): Promise<string | undefined> {
+export async function snapshotWorkingTree(
+  root: string,
+  run: GitRunner,
+  onFail?: (reason: string) => void,
+): Promise<string | undefined> {
   const shadow = shadowIndexPath(root);
   try {
     // `--git-path` resolves correctly in a linked worktree, where the index does not live in
@@ -80,11 +95,34 @@ export async function snapshotWorkingTree(root: string, run: GitRunner): Promise
     }
     // `--ignore-errors` so one unreadable file cannot cost the whole snapshot. Gitignore is
     // respected, which is what keeps this from hashing node_modules.
-    await run(['add', '-A', '--ignore-errors', '--'], { GIT_INDEX_FILE: shadow });
+    //
+    // It still *exits* non-zero when any path failed, which is documented and easy to hit: a
+    // file the agent is in the middle of moving vanishes between being listed and being read.
+    // Everything else is staged by then, so the failure is noted and the tree is written
+    // anyway — abandoning the snapshot over one transient file would give up exactly when the
+    // tree is changing fastest.
+    try {
+      await run(['add', '-A', '--ignore-errors', '--'], { GIT_INDEX_FILE: shadow });
+    } catch {
+      // Partial staging; `write-tree` below either produces a tree or fails outright.
+    }
     const tree = (await run(['write-tree'], { GIT_INDEX_FILE: shadow })).trim();
-    return /^[0-9a-f]{40,64}$/.test(tree) ? tree : undefined;
-  } catch {
+    if (/^[0-9a-f]{40,64}$/.test(tree)) return tree;
+    onFail?.(`write-tree returned ${JSON.stringify(tree.slice(0, 80))}`);
     return undefined;
+  } catch (err) {
+    // Reported rather than swallowed: without this, a snapshot that always fails looks exactly
+    // like a working tree that never changes, and the panel quietly serves the older signals
+    // forever with nothing to say why.
+    const e = err as { message?: string; stderr?: string; signal?: string; code?: unknown };
+    const detail = (e.stderr ?? '').trim() || e.message || String(err);
+    onFail?.(`${detail.slice(0, 300)}${e.signal ? ` (signal ${e.signal})` : ''}`);
+    return undefined;
+  } finally {
+    // Six or seven megabytes per call in a large repository, so it does not stay in the temp
+    // directory; the lock goes too, in case git was killed before it could clean up.
+    await fs.rm(shadow, { force: true }).catch(() => undefined);
+    await fs.rm(`${shadow}.lock`, { force: true }).catch(() => undefined);
   }
 }
 
@@ -116,4 +154,57 @@ export async function treeChanges(from: string, to: string, run: GitRunner): Pro
     );
   }
   return map;
+}
+
+/**
+ * Paths whose content git will not diff as text.
+ *
+ * `--numstat` prints `-` for both counts on a binary file, which is git's own judgement and
+ * cheaper than guessing from the extension. It matters because the snapshot side of a
+ * comparison is served as a *text* document: handing the editor a mangled UTF-8 rendering of
+ * a PNG is worse than admitting there is nothing useful to show.
+ */
+export async function binaryPaths(from: string, to: string, run: GitRunner): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const stdout = await run(['diff-tree', '-r', '-M', '--no-color', '--numstat', from, to, '--']);
+    for (const line of stdout.split('\n')) {
+      const parts = line.split('\t');
+      if (parts[0] !== '-' || parts[1] !== '-') continue;
+      const p = parts[parts.length - 1]?.trim();
+      if (p) out.add(p);
+    }
+  } catch {
+    // Not knowing means treating everything as text, which is what it was before.
+  }
+  return out;
+}
+
+/** A scratch index older than this belongs to a process that is no longer running. */
+const SCRATCH_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Remove scratch indexes left behind by a process that was killed mid-snapshot.
+ *
+ * A crash skips the cleanup that every completed snapshot does, and each file is six or seven
+ * megabytes in a large repository — forty of them had accumulated during a day of testing.
+ * Age alone is enough to tell: a snapshot takes seconds, so nothing an hour old is in use.
+ */
+export async function sweepScratchIndexes(): Promise<void> {
+  try {
+    const dir = os.tmpdir();
+    const now = Date.now();
+    for (const name of await fs.readdir(dir)) {
+      if (!name.startsWith('redline-') || !name.includes('.index')) continue;
+      const full = path.join(dir, name);
+      try {
+        const { mtimeMs } = await fs.stat(full);
+        if (now - mtimeMs > SCRATCH_TTL_MS) await fs.rm(full, { force: true });
+      } catch {
+        // gone already, or not ours to remove
+      }
+    }
+  } catch {
+    // no temp directory listing; the files are harmless either way
+  }
 }

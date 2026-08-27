@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.2 — 2026-08-27
+
+A review of 0.4.0, which found six things. Two of them made snapshots fail outright, and both
+failed silently, which is how they got through.
+
+- Fixed: a snapshot was abandoned whenever any file could not be staged. `git add --ignore-errors`
+  continues past a file it cannot read but **still exits non-zero**, and a file vanishing between
+  being listed and being read is routine while an agent moves things around — so the mechanism
+  gave up exactly when the tree was changing fastest. The tree is written from whatever did
+  stage.
+- Fixed: two snapshots at once fought over one scratch index — `Another git process seems to be
+  running in this repository` — which hit two windows on one repository, and a background refresh
+  beside any other caller. The scratch index is unique per call now, which costs nothing: the
+  repository's own index is copied over it every time anyway.
+- Fixed: scratch indexes were never deleted. Six to seven megabytes each, forty of them (40 MB)
+  after a day of testing. Each snapshot now removes its own, and a window sweeps any left behind
+  by a process that was killed mid-snapshot.
+- Fixed: a failed snapshot said nothing at all, so a mechanism that never worked was
+  indistinguishable from a working tree that never changed. The reason git gave is logged.
+- Fixed: images and other binary files were served as text on the snapshot side of a diff, which
+  renders as mangled UTF-8. Binary paths are taken from git's own `--numstat` judgement and
+  compared the way they were before snapshots existed.
+- Fixed: a snapshot that could no longer be trusted was served indefinitely. A tree nothing has
+  changed since is exact however old it is — which is what keeps an **idle window from
+  snapshotting at all**, now asserted in the tests: `snapshots: 0 while idle, 1 after a write`.
+  But once the tree is known to have moved on, a snapshot is only served for a minute before
+  falling back to signals that correct themselves. Snapshot calls are also bounded by a timeout,
+  so a `git` that never returns cannot leave one permanently in flight.
+- Measured, inside the extension host on a 42k-file monorepo: 4871 ms cold, **1956 ms warm**,
+  38 ms to compare two trees. From a shell, 1.3 s. It is never blocked on.
+
 ## 0.4.1 — 2026-08-27
 
 - Fixed: the Claude Code plugin failed to load. Its manifest pointed at

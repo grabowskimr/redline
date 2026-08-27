@@ -2,7 +2,7 @@
   "name": "redline",
   "displayName": "Redline",
   "description": "Review Claude Code's work — inline notes on the lines that need changes, handed back as one prompt.",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publisher": "marcin",
   "license": "MIT",
   "repository": {
