@@ -17,8 +17,9 @@
  */
 import { appendFile, mkdir, stat, writeFile, readFile, readdir, unlink, copyFile, rename, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
@@ -161,61 +162,70 @@ async function bashEnd(root, sessionId) {
 }
 
 /**
- * Copy every file that is already modified, so the next run can be told apart from the ones
- * before it.
+ * Snapshot the whole working tree into a git tree object.
  *
- * Git cannot answer "which lines did this run change?" for uncommitted work: a diff against
- * the base commit is cumulative, so an edit made twenty minutes ago is indistinguishable
- * from one made just now. Knowing what the file looked like when the request was submitted
- * is the only way, and this is the moment to record it.
+ * This is the one thing only a hook can do: capture what the tree looked like *before* the
+ * agent starts editing. Everything Redline shows about a run is a diff between this tree and
+ * a later one, which is why the answer covers new files, deleted files and renames without a
+ * single timestamp comparison.
  *
- * Files that are currently clean are deliberately skipped: if the run touches one, its whole
- * diff against the base belongs to this run anyway.
+ * The user's index and working tree are untouched — `GIT_INDEX_FILE` points the staging at a
+ * scratch file in the temp directory. The real index is copied there first: staging 42k files
+ * against an empty index costs about 6 seconds, against a copy of the repository's own index
+ * under one, because git's stat cache does the work. Objects land in the repository unreachable
+ * and are pruned on git's usual schedule, as `git stash create` leaves them.
  *
- * Only tracked files are listed. `git ls-files --others` would add untracked ones, but it
- * walks the entire working tree applying gitignore — measured at 823-1203ms to find three
- * files in a 42k-file repo, against 61-109ms for the diff and 6ms for the copies. Redline
- * dates anything without a snapshot entry against the timestamp below instead, which costs
- * nothing and answers the same question.
- *
- * Runs inline rather than detached — the copy has to finish before the agent starts editing,
- * and it is a handful of small files while the model is still thinking.
+ * Runs inline at UserPromptSubmit: it has to finish before the agent's first edit, or the
+ * "before" is not before anything. Measured at ~0.9s in a 42k-file monorepo.
  */
-async function snapshotRunStart(root) {
-  const dir = join(logDir(root), 'snapshot');
-  let changed = [];
-  try {
-    const tracked = await execFileP('git', ['-c', 'core.quotePath=false', 'diff', '--name-only', 'HEAD'], {
+async function snapshotTree(root) {
+  const shadow = join(tmpdir(), `redline-${createHash('sha1').update(root).digest('hex').slice(0, 16)}.hook.index`);
+  const git = (args, env) =>
+    execFileP('git', ['-c', 'core.quotePath=false', ...args], {
       cwd: root,
+      env: env ? { ...process.env, ...env } : process.env,
       maxBuffer: 16 * 1024 * 1024,
+      timeout: SNAPSHOT_TIMEOUT_MS,
     });
-    changed = tracked.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
-  } catch {
-    return; // not a repo, or git unavailable
-  }
-
-  await rm(dir, { recursive: true, force: true });
-  await mkdir(dir, { recursive: true });
-  const files = {};
-  let total = 0;
-  for (const rel of changed.slice(0, MAX_SNAPSHOT_FILES)) {
-    const stored = encodeURIComponent(rel);
-    try {
-      const { size } = await stat(join(root, rel));
-      if (size > MAX_SNAPSHOT_FILE_BYTES) continue;
-      if (total + size > MAX_SNAPSHOT_TOTAL_BYTES) break;
-      await copyFile(join(root, rel), join(dir, stored));
-      total += size;
-      files[rel] = stored;
-    } catch {
-      // unreadable or vanished; it simply has no snapshot
+  try {
+    const { stdout: indexPath } = await git(['rev-parse', '--git-path', 'index']);
+    const real = indexPath.trim();
+    if (real) {
+      try {
+        await copyFile(resolve(root, real), shadow);
+      } catch {
+        await rm(shadow, { force: true }); // no index yet: stage from empty
+      }
     }
+    await git(['add', '-A', '--ignore-errors', '--'], { GIT_INDEX_FILE: shadow });
+    const { stdout } = await git(['write-tree'], { GIT_INDEX_FILE: shadow });
+    const tree = stdout.trim();
+    return /^[0-9a-f]{40,64}$/.test(tree) ? tree : undefined;
+  } catch {
+    return undefined; // not a repository, git unavailable, or too slow
   }
-  await writeFile(
-    join(dir, 'manifest.json'),
-    JSON.stringify({ at: new Date().toISOString(), files }),
-    'utf8',
-  );
+}
+
+/** Beyond this the snapshot is holding up the turn; the older signals cover the gap. */
+const SNAPSHOT_TIMEOUT_MS = 30_000;
+
+/**
+ * Record the tree the run starts from.
+ *
+ * Its own file, written only at submit: Redline watches for it to know the run boundary has
+ * moved. The end-of-run tree rides along with the stop marker instead, so neither event can
+ * ever be mistaken for the other.
+ */
+async function recordRunStart(root) {
+  const tree = await snapshotTree(root);
+  if (!tree) return;
+  const dir = logDir(root);
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, 'runs.json');
+  const temp = `${file}.tmp`;
+  // Renamed into place: Redline could otherwise read a half-written file and see no run at all.
+  await writeFile(temp, JSON.stringify({ before: { at: new Date().toISOString(), tree } }), 'utf8');
+  await rename(temp, file);
 }
 
 /**
@@ -266,26 +276,30 @@ async function markAlive(root) {
   );
 }
 
-/** Bounds: a snapshot is meant to be a handful of source files, not a copy of the tree. */
-const MAX_SNAPSHOT_FILES = 200;
-const MAX_SNAPSHOT_FILE_BYTES = 2 * 1024 * 1024;
-/** Total ceiling, so the per-file limit cannot multiply into hundreds of megabytes. */
-const MAX_SNAPSHOT_TOTAL_BYTES = 32 * 1024 * 1024;
-
 /**
  * A run ended. Redline watches for this file to know the moment to refresh, rather than
  * polling for it — and housekeeping goes here, where no tool call is waiting on it.
+ *
+ * The tree recorded here is what "the last run" is measured against, together with the one
+ * from the start of the run.
  */
 async function runEnded(root, sessionId) {
   const dir = logDir(root);
   await mkdir(dir, { recursive: true });
+  // Snapshotted before the marker is written, so that by the time Redline reacts to the marker
+  // the exact result of the run is already on disk and the panel has nothing left to compute.
+  const tree = await snapshotTree(root);
   await writeFile(
     join(dir, 'stopped.json'),
-    JSON.stringify({ at: new Date().toISOString(), session: sessionId }),
+    JSON.stringify({ at: new Date().toISOString(), session: sessionId, tree }),
     'utf8',
   );
   await trimLog(join(dir, 'touched.jsonl'));
   await sweepMarkers(dir);
+  // Earlier versions kept a directory of copied files here to serve as the run's "before".
+  // A tree object does that now, so this is dead weight — and it was measured in tens of
+  // megabytes for a large run.
+  await rm(join(dir, 'snapshot'), { recursive: true, force: true });
 }
 
 try {
@@ -309,10 +323,11 @@ try {
         },
       };
     }
-    await snapshotRunStart(root);
+    await recordRunStart(root);
   } else if (event === 'Stop') {
     // Deliberately not SubagentStop: a turn using subagents fires that once per subagent,
     // and each one would look like the end of the run.
+    //
     await runEnded(root, sessionId);
   } else if (tool === 'Bash') {
     if (event === 'PreToolUse') await bashStart(root, sessionId);

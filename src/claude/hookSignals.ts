@@ -66,9 +66,10 @@ export class HookSignals implements vscode.Disposable {
           this._onDidEndRun.fire();
           return;
         }
-        // The snapshot manifest is written as a request is submitted: the run boundary has
-        // moved, which is the only thing that makes re-reading the transcript worthwhile.
-        if (name === 'manifest.json') {
+        // Written as a request is submitted: the run boundary has moved, which is the only
+        // thing that makes re-reading the transcript worthwhile. `runs.json` is the current
+        // hook's marker and `manifest.json` an older one's, so both are watched.
+        if (name === 'runs.json' || name === 'manifest.json') {
           this.runStartedAt = Date.now();
           this._onDidStartRun.fire();
           return;

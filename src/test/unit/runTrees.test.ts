@@ -1,0 +1,67 @@
+import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { readRunTrees } from '../../claude/runTrees';
+import { projectSlug } from '../../claude/transcripts';
+
+const A = 'a'.repeat(40);
+const B = 'b'.repeat(40);
+
+describe('run trees recorded by the hook', () => {
+  let home: string;
+  let repo: string;
+  let dir: string;
+
+  beforeEach(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'lr-runtrees-'));
+    repo = '/tmp/some/repo';
+    dir = path.join(home, '.claude', 'redline', projectSlug(repo));
+    await fs.mkdir(dir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(home, { recursive: true, force: true });
+  });
+
+  const started = (body: unknown): Promise<void> =>
+    fs.writeFile(path.join(dir, 'runs.json'), JSON.stringify(body), 'utf8');
+  const stopped = (body: unknown): Promise<void> =>
+    fs.writeFile(path.join(dir, 'stopped.json'), JSON.stringify(body), 'utf8');
+
+  it('reads the start of the run from one file and its end from the other', async () => {
+    await started({ before: { at: '2026-08-27T10:00:00.000Z', tree: A } });
+    await stopped({ at: '2026-08-27T10:04:00.000Z', session: 's', tree: B });
+    const trees = await readRunTrees(repo, home);
+    assert.equal(trees?.before?.tree, A);
+    assert.equal(trees?.after?.tree, B);
+  });
+
+  it('returns the start alone while the run is still going', async () => {
+    await started({ before: { at: '2026-08-27T10:00:00.000Z', tree: A } });
+    const trees = await readRunTrees(repo, home);
+    assert.equal(trees?.before?.tree, A);
+    assert.equal(trees?.after, undefined, 'nothing has stopped yet');
+  });
+
+  it('ignores a stop marker from a hook version that records no tree', async () => {
+    await started({ before: { at: '2026-08-27T10:00:00.000Z', tree: A } });
+    await stopped({ at: '2026-08-27T10:04:00.000Z', session: 's' });
+    const trees = await readRunTrees(repo, home);
+    assert.equal(trees?.after, undefined);
+  });
+
+  it('rejects anything that is not a tree hash, rather than passing it to git', async () => {
+    await started({ before: { at: '2026-08-27T10:00:00.000Z', tree: 'HEAD; rm -rf /' } });
+    assert.equal(await readRunTrees(repo, home), undefined);
+  });
+
+  it('survives a half-written file', async () => {
+    await fs.writeFile(path.join(dir, 'runs.json'), '{"before": {"at": "2026', 'utf8');
+    assert.equal(await readRunTrees(repo, home), undefined);
+  });
+
+  it('says nothing when the hook is not installed', async () => {
+    assert.equal(await readRunTrees('/tmp/never/used', home), undefined);
+  });
+});

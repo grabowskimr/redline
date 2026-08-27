@@ -2,6 +2,9 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { snapshotWorkingTree, treeChanges } from '../../../git/snapshotTree';
 import type { RedlineApi } from '../../../extension';
 
 const EXT_ID = 'marcin.redline';
@@ -223,5 +226,43 @@ describe('against a real repository', () => {
   it('boots the panel against a large repository', async () => {
     await vscode.commands.executeCommand('redline.focusPanel');
     assert.equal(await api.panelReady(20_000), true, 'panel reported ready');
+  });
+  it('snapshots the working tree in about the time the untracked walk used to cost', async () => {
+    // The mechanism the last run is measured with. If this regresses into several seconds in a
+    // large repository, every refresh is felt — it replaced a listing measured at 823-1203ms
+    // here, so that is the bar.
+    const git = async (args: string[], env?: Record<string, string>): Promise<string> => {
+      const { stdout } = await promisify(execFile)('git', ['-c', 'core.quotePath=false', ...args], {
+        cwd: root,
+        env: env ? { ...process.env, ...env } : process.env,
+        maxBuffer: 32 * 1024 * 1024,
+      });
+      return stdout;
+    };
+    const started = Date.now();
+    const tree = await snapshotWorkingTree(root, git);
+    const snapMs = Date.now() - started;
+    assert.ok(tree, 'a tree was written');
+    const compared = Date.now();
+    const changes = await treeChanges('HEAD', tree, git);
+    const diffMs = Date.now() - compared;
+    const kinds = [...changes.values()].reduce<Record<string, number>>((acc, s) => {
+      acc[s.kind] = (acc[s.kind] ?? 0) + 1;
+      return acc;
+    }, {});
+    console.log(`      snapshot in ${snapMs}ms, compared in ${diffMs}ms — ${JSON.stringify(kinds)}`);
+    assert.ok(snapMs < 5000, `snapshot took ${snapMs}ms`);
+    assert.ok(diffMs < 500, `comparison took ${diffMs}ms`);
+    // The dirty set from a listing and from a snapshot have to agree, or one of them is lying.
+    const listed = new Set(
+      (await git(['status', '--porcelain', '--untracked-files=all']))
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => l.slice(3).split(' -> ').pop() as string),
+    );
+    for (const f of changes.keys()) {
+      if (changes.get(f)?.kind === 'renamed') continue; // reported under both paths by status
+      assert.ok(listed.has(f), `${f} is in the snapshot but not in git status`);
+    }
   });
 });

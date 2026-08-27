@@ -112,18 +112,17 @@ that every file the pull brought in changed — on a real worktree that was 2353
 the honest answer was none.
 
 Because a commit is always compared against the working tree, this works when VS Code is
-opened long after the agent finished. The file list is `git diff --name-only <base>` plus
-untracked files, so modified, staged, newly added, deleted, renamed and **committed-during-
-the-session** files all count. Gitignored files do not.
-
-A file git has never tracked is always in the review, whichever run created it: it exists in
-no base, so nothing about it has been read yet.
+opened long after the agent finished. Modified, staged, newly added, deleted, renamed and
+**committed-during-the-session** files all count. Gitignored files do not.
 
 **Last** narrows that to your most recent request. The boundary is the last thing *you* asked
 for, read from the session transcript, so three requests a few minutes apart stay three
-separate reviews. If no request can be found, the run is cut where the agent was idle longer
-than `redline.lastRunGapMinutes`; with no transcript at all it falls back to clustering file
-modification times, which cannot tell your own saves from the agent's work.
+separate reviews.
+
+With the plugin installed, "the last run" is a comparison between two snapshots of the working
+tree — see below. Without it, the run is cut where the agent was idle longer than
+`redline.lastRunGapMinutes`, and files are dated by modification time, which cannot tell your
+own saves from the agent's work.
 
 ## The Claude Code plugin (optional)
 
@@ -139,12 +138,20 @@ every session** — they are harness-only and never enter the model's context.
 
 **What it buys you**
 
-- **Exact attribution.** Timestamps cannot tell *who* changed a file; a save of yours, or a
-  formatter's write, looks like the agent's work. The hook records the agent's own edits, so
-  **Last** means "files Claude changed" rather than "files that changed while Claude worked".
-- **Line-level accuracy.** At `UserPromptSubmit` it copies every already-modified file, and
-  **Last** diffs against those copies — so editing line 2 in one run and line 4 in the next
-  shows line 4 alone. Git cannot do this: a diff against a base commit is cumulative.
+- **The exact set of files, including new ones.** At `UserPromptSubmit` the hook stages the
+  whole working tree into a *throwaway* index and writes the resulting tree object; at `Stop`
+  it does the same again. What the run changed is then one command:
+
+  ```sh
+  git diff-tree -r -M --name-status <before> <after>
+  ```
+
+  About 20 ms, and it reports added, deleted, modified and renamed exactly — no timestamps, no
+  separate listing for untracked files, no guessing who wrote what. This is what makes a file
+  the run *created* appear, alongside the file whose import it updated.
+- **Line-level accuracy.** **Last** compares each file against the snapshot, not against the
+  base commit — so editing line 2 in one run and line 4 in the next shows line 4 alone. Git
+  cannot do this on its own: a diff against a base commit is cumulative.
 - **A panel that keeps up.** Redline watches the hook's own directory, so figures move about
   half a second after the agent writes a file instead of on a timer.
 - **Sending that always lands.** Without the plugin the whole prompt is typed into the
@@ -152,10 +159,17 @@ every session** — they are harness-only and never enter the model's context.
   made Enter unreliable. With it, the prompt is written to disk and a short token is typed;
   the hook injects the feedback into the model's context.
 
-The hook writes only to `~/.claude/redline/<slug>/`, never into your repository. It answers
-immediately and does its work detached, so it adds no measurable time to a tool call — apart
-from the run-start snapshot, which must finish before the agent starts editing and costs about
-150 ms on a 42k-file repository.
+**What it costs.** The hook writes only to `~/.claude/redline/<slug>/`, never into your
+repository. It answers immediately and does its work detached, so it adds no measurable time
+to a tool call — apart from the two snapshots, which have to be taken at the moment they
+describe. A snapshot is about 1.3 s on a 42k-file repository: the repository's own index is
+copied to a scratch file first, so git's stat cache does the work, and `GIT_INDEX_FILE` keeps
+the staging away from your index and working tree, which are never touched.
+
+The tree and blob objects land in your repository's object store, unreachable, the same way
+`git stash create` leaves its own behind — git prunes them on its usual schedule. Redline
+creates no refs, branches or commits, and Redline's side never blocks the panel on a snapshot:
+it uses the hook's, or takes one in the background and refreshes when it lands.
 
 **Editing `settings.json` by hand still works** and is what earlier versions asked for. If you
 did that, remove those entries once the plugin is installed, or every hook runs twice —

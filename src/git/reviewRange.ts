@@ -10,6 +10,9 @@ import { parseDiffByFile, parseHunks } from './hunks';
 import { RUN_GRACE_MS, selectRunFiles } from './runFiles';
 import { touchedPathsSince } from '../claude/touched';
 import { differsFromSnapshot, readSnapshot, RunSnapshot } from '../claude/snapshot';
+import { readRunTrees, RunTree } from '../claude/runTrees';
+import { GitRunner, snapshotWorkingTree, treeChanges, TreeChange } from './snapshotTree';
+import { treeSide } from './treeSide';
 
 const execFileP = promisify(execFile);
 const CACHE_MS = 2000;
@@ -57,12 +60,8 @@ export function registerEmptySideProvider(): vscode.Disposable {
   });
 }
 
-/** What happened to a path between the base and now. Decides which sides a diff has. */
-type ChangeStatus =
-  | { kind: 'added' }
-  | { kind: 'deleted' }
-  | { kind: 'modified' }
-  | { kind: 'renamed'; from: string };
+/** What happened to a path between two points. Decides which sides a diff has. */
+type ChangeStatus = TreeChange;
 
 /** Above this, a recomputation is worth explaining in the log. */
 const SLOW_SUMMARY_MS = 500;
@@ -84,6 +83,15 @@ const SNAPSHOT_TOLERANCE_MS = 60_000;
  * file size and mtime, so an unchanged session costs a `stat`.
  */
 const BASE_CACHE_MS = 4_000;
+
+/**
+ * How long a snapshot of the working tree is reused for.
+ *
+ * Taking one costs about a second in a 42k-file repository — the same walk the untracked
+ * listing used to cost, and it replaces it. The run's own end is snapshotted by the hook and
+ * costs nothing to read, so this only paces the panel while the agent is still writing.
+ */
+const TREE_CACHE_MS = 4_000;
 
 /**
  * A gap longer than this between two file modifications starts a new "run". Long enough
@@ -182,6 +190,19 @@ export class ReviewRange implements vscode.Disposable {
   private snapshot: RunSnapshot | undefined;
   /** Per-path status behind the current summary: which sides of a comparison exist. */
   private statuses = new Map<string, ChangeStatus>();
+  /** The same, measured from the start of the last run rather than from the base. */
+  private runStatuses = new Map<string, ChangeStatus>();
+  /**
+   * The pair of tree snapshots the current summary was computed from, when the hook made one
+   * available. Also what the diff editor compares against, so the panel's counts and the
+   * diff it opens can never disagree.
+   */
+  private treeState: { base: string; before: string; now: string } | undefined;
+  /** Our own snapshot of the working tree, and when it was taken. */
+  private treeSnap: { at: number; tree: string } | undefined;
+  private treeInFlight: Promise<void> | undefined;
+  /** The hook's end-of-run snapshot, when it has written one for the current run. */
+  private hookAfter: RunTree | undefined;
   /** Untracked listing, reused until a file is created or deleted. */
   private untrackedCache: { at: number; files: string[] } | undefined;
   private untrackedDirty = true;
@@ -227,16 +248,22 @@ export class ReviewRange implements vscode.Disposable {
 
   // ── git plumbing ──────────────────────────────────────────────────────
 
-  private async run(args: string[]): Promise<string> {
+  private async run(args: string[], env?: Record<string, string>): Promise<string> {
     const root = await this.repoRoot();
     if (!root) throw new Error('not a git repository');
     // core.quotePath is on by default, which would return `"caf\303\251.ts"` for
     // `café.ts` — a path that then fails every stat, URI and open downstream.
     const { stdout } = await execFileP('git', ['-c', 'core.quotePath=false', ...args], {
       cwd: root,
+      env: env ? { ...process.env, ...env } : process.env,
       maxBuffer: 32 * 1024 * 1024,
     });
     return stdout;
+  }
+
+  /** The runner shape the snapshot helpers take. */
+  private get runner(): GitRunner {
+    return (args, env) => this.run(args, env);
   }
 
   /** The repository root — `git diff` prints paths relative to it, not to the open folder. */
@@ -480,6 +507,16 @@ export class ReviewRange implements vscode.Disposable {
     const resolved = await this.resolveBase();
     const tBase = Date.now();
     if (!resolved) return undefined;
+
+    // Two tree snapshots answer the whole question exactly, so they are tried first and
+    // everything below is the fallback for when the hook is not installed.
+    const fromTrees = await this.summaryFromTrees(resolved, t0, tBase);
+    if (fromTrees) {
+      this.cache = { at: Date.now(), summary: fromTrees };
+      this.stale = false;
+      return fromTrees;
+    }
+
     const files = new Set<string>();
     let untrackedNow: string[] = [];
     let unavailable = false;
@@ -537,6 +574,8 @@ export class ReviewRange implements vscode.Disposable {
       recentSince = burst.since ? new Date(burst.since).toISOString() : undefined;
     }
 
+    this.treeState = undefined;
+    this.runStatuses.clear();
     const summary: RangeSummary = {
       base: resolved.base,
       label: resolved.label,
@@ -562,6 +601,161 @@ export class ReviewRange implements vscode.Disposable {
     this.cache = { at: Date.now(), summary };
     this.stale = false;
     return summary;
+  }
+
+  /**
+   * The summary, computed from a pair of tree snapshots.
+   *
+   * Undefined whenever the pair is not there or not usable, and the caller then falls back to
+   * the older signals. The two are deliberately not blended: mixing an exact answer with a
+   * heuristic one produces a third thing that is neither, and that is what the earlier
+   * versions of this did.
+   */
+  private async summaryFromTrees(
+    resolved: ResolvedBase,
+    t0: number,
+    tBase: number,
+  ): Promise<RangeSummary | undefined> {
+    if (!resolved.run) return undefined;
+    const root = await this.repoRoot();
+    if (!root) return undefined;
+    const before = await this.beforeTree(root, resolved.run);
+    if (!before) return undefined;
+    const now = await this.currentTree(root, Date.parse(before.at));
+    if (!now) return undefined;
+
+    let all: Map<string, ChangeStatus>;
+    let run: Map<string, ChangeStatus>;
+    try {
+      // Independent reads of the same object store; each is about 20ms.
+      [all, run] = await Promise.all([
+        treeChanges(resolved.base, now, this.runner),
+        treeChanges(before.tree, now, this.runner),
+      ]);
+    } catch (err) {
+      this.logger.trace(`could not compare snapshots, falling back: ${String(err)}`);
+      return undefined;
+    }
+    const tFiles = Date.now();
+
+    // Files that were already untracked when a baseline was pinned are not part of it, so
+    // they would otherwise show as added forever. Hidden only while they stay untouched.
+    const pinned = this.store.baseline;
+    const preexisting = new Set(pinned?.untracked ?? []);
+    const pinnedAt = pinned ? Date.parse(pinned.at) : Number.NaN;
+    const files: string[] = [];
+    for (const [file, status] of all) {
+      if (status.kind === 'added' && preexisting.has(file) && Number.isFinite(pinnedAt)) {
+        if (!(await this.modifiedAfter(file, pinnedAt))) continue;
+      }
+      files.push(file);
+    }
+    files.sort();
+
+    const visible = new Set(files);
+    // A file the run changed and then changed back is not part of the review, so the last run
+    // stays a subset of everything shown.
+    const recent = [...run.keys()].filter((f) => visible.has(f)).sort();
+
+    this.statuses = all;
+    this.runStatuses = run;
+    this.treeState = { base: resolved.base, before: before.tree, now };
+    this.snapshot = undefined; // the trees supersede it
+
+    const summary: RangeSummary = {
+      base: resolved.base,
+      label: resolved.label,
+      origin: resolved.origin,
+      files,
+      fileCount: files.length,
+      recent,
+      recentCount: recent.length,
+      recentLabel: `in the last run (since ${shortTime(before.at)})`,
+      olderCount: files.length - recent.length,
+      recentSource: 'hook',
+    };
+    const total = Date.now() - t0;
+    if (total > SLOW_SUMMARY_MS) {
+      this.logger.info(
+        `changes computed from snapshots in ${total}ms — base ${tBase - t0}ms, trees ${tFiles - tBase}ms ` +
+          `(${files.length} changed, ${recent.length} in the last run)`,
+      );
+    }
+    return summary;
+  }
+
+  /**
+   * The tree recorded when this run's request was submitted.
+   *
+   * Checked against the run the transcript reports: a snapshot older than that belongs to an
+   * earlier run, which would report the *previous* run's work as this one's — the exact
+   * failure this mechanism exists to prevent. The hook writes it and the transcript records
+   * the same moment, so the tolerance only absorbs clock jitter.
+   */
+  private async beforeTree(root: string, run: { since: string }): Promise<RunTree | undefined> {
+    let trees = await readRunTrees(root);
+    if (!trees) {
+      for (const cwd of [...this.cwdHints].slice(-MAX_CWD_HINTS)) {
+        trees = await readRunTrees(cwd);
+        if (trees) break;
+      }
+    }
+    this.hookAfter = trees?.after;
+    const before = trees?.before;
+    if (!before) return undefined;
+    const snapAt = Date.parse(before.at);
+    const runAt = Date.parse(run.since);
+    if (Number.isFinite(snapAt) && Number.isFinite(runAt) && snapAt < runAt - SNAPSHOT_TOLERANCE_MS) {
+      this.logger.info(
+        `ignoring a snapshot from ${before.at}: the run started at ${run.since}, so the hook did not record this request`,
+      );
+      return undefined;
+    }
+    return before;
+  }
+
+  /**
+   * The working tree as it stands, as a tree object.
+   *
+   * Never blocked on. The hook's end-of-run snapshot is preferred whenever it is newer than
+   * ours, which is the common case for someone reading the panel after the agent stops: the
+   * answer is then two `diff-tree` calls and nothing else. Otherwise the last known tree is
+   * returned and a new one is taken in the background — measured at 1.3s in a 42k-file repo
+   * from a shell and over ten times that inside a busy extension host, which is far too long
+   * to hold a refresh for. When there is no tree at all yet, this returns nothing and the
+   * summary falls back to the older signals until one lands.
+   */
+  private async currentTree(root: string, runStartedAt: number): Promise<string | undefined> {
+    const after = this.hookAfter;
+    const afterAt = after ? Date.parse(after.at) : Number.NaN;
+    // Only if it belongs to *this* run: while the agent is working, the newest stop marker is
+    // the previous run's, and reading it as "now" would report that this run changed nothing.
+    const belongsToRun = Number.isFinite(afterAt) && Number.isFinite(runStartedAt) && afterAt >= runStartedAt;
+    if (after && belongsToRun && afterAt > (this.treeSnap?.at ?? 0)) {
+      this.treeSnap = { at: afterAt, tree: after.tree };
+      return after.tree;
+    }
+    if (this.treeSnap && Date.now() - this.treeSnap.at < TREE_CACHE_MS) return this.treeSnap.tree;
+    void this.refreshTree(root);
+    return this.treeSnap?.tree;
+  }
+
+  /** One snapshot at a time; re-renders if the tree actually moved. */
+  private async refreshTree(root: string): Promise<void> {
+    if (this.treeInFlight) return this.treeInFlight;
+    this.treeInFlight = (async () => {
+      const started = Date.now();
+      const tree = await snapshotWorkingTree(root, this.runner);
+      if (!tree) return;
+      const moved = tree !== this.treeSnap?.tree;
+      this.treeSnap = { at: started, tree };
+      const took = Date.now() - started;
+      if (took > SLOW_SUMMARY_MS) this.logger.trace(`snapshotted the working tree in ${took}ms`);
+      if (moved && this.cache) this.invalidate(true);
+    })().finally(() => {
+      this.treeInFlight = undefined;
+    });
+    return this.treeInFlight;
   }
 
   /** Gather the inputs `selectRunFiles` needs, then let it apply the rules. */
@@ -863,6 +1057,24 @@ export class ReviewRange implements vscode.Disposable {
     const api = await this.git?.getApi();
     const root = await this.repoRoot();
     const uris = await this.changedUris(scope);
+
+    // With snapshots there is a real document on both sides of every entry, and for the last
+    // run the left side is the file as the run found it — so what is shown is this run's work
+    // rather than every change since the base commit.
+    const trees = this.treeState;
+    if (trees && trees.base === summary.base && root) {
+      const left = scope === 'recent' ? trees.before : summary.base;
+      const statuses = scope === 'recent' ? this.runStatuses : this.statuses;
+      return uris.map((uri) => {
+        const rel = path.relative(root, uri.fsPath);
+        const status = statuses.get(rel);
+        // A path absent from the left tree — a file the run created — resolves to an empty
+        // document, which reads as the whole file arriving. Nothing to special-case.
+        const from = status?.kind === 'renamed' ? status.from : rel;
+        const modified = status?.kind === 'deleted' ? emptySide(uri) : uri;
+        return [uri, treeSide(root, left, from), modified] as [vscode.Uri, vscode.Uri, vscode.Uri];
+      });
+    }
     // For the last run, compare against the snapshot taken when the request was submitted:
     // otherwise a file edited in an earlier run shows those older lines here too, which is
     // not "what changed in the last run" by any reading.
@@ -906,12 +1118,32 @@ export class ReviewRange implements vscode.Disposable {
     if (!root || !summary) return [];
     // Keyed by the snapshot too: the ranges differ entirely depending on which side the
     // comparison uses, so a new run must not reuse the previous run's hunks.
-    const key = `${summary.base}::${this.snapshot?.at ?? ''}`;
+    const key = `${summary.base}::${this.treeState?.before ?? this.snapshot?.at ?? ''}`;
     if (this.hunkCache?.base === key) return this.hunkCache.hunks;
     const startedAt = Date.now();
     const out: Hunk[] = [];
     const fromSnapshot = new Set<string>();
     try {
+      // The run's own lines, from the tree recorded when its request was submitted. One diff
+      // for every file at once, against a snapshot rather than a directory of copies.
+      if (this.treeState) {
+        const recent = new Set(summary.recent);
+        try {
+          const runDiff = await this.run(['diff', '-U0', '--no-color', this.treeState.before, '--']);
+          for (const file of parseDiffByFile(runDiff)) {
+            if (!recent.has(file.path)) continue;
+            fromSnapshot.add(file.path);
+            for (const h of file.hunks) {
+              const hunk: Hunk = { uri: vscode.Uri.file(path.join(root, file.path)), start: h.start, end: h.end };
+              if (h.deletion) hunk.deletion = true;
+              out.push(hunk);
+            }
+          }
+        } catch (err) {
+          this.logger.trace(`could not diff against the run snapshot: ${String(err)}`);
+        }
+      }
+
       // Files the run-start snapshot covers: compare against that copy, so navigation agrees
       // with the diff the panel opens instead of walking earlier runs' lines as well.
       if (this.snapshot) {
@@ -950,11 +1182,13 @@ export class ReviewRange implements vscode.Disposable {
           out.push(hunk);
         }
       }
-      // A new file has no diff to parse, so its whole body is the hunk. The listing comes
-      // from the cached accessor: calling `ls-files` here was costing 1-2.6s in a large
-      // repository, which is what made the first `⌥F7` feel broken.
+      // A new file has no diff to parse, so its whole body is the hunk. Which files those are
+      // comes from the status map computed alongside the summary — calling `ls-files` here was
+      // costing 1-2.6s in a large repository, which is what made the first `⌥F7` feel broken.
       const changed = new Set(summary.files);
-      const newFiles = (await this.untracked()).filter((rel) => changed.has(rel));
+      const newFiles = [...this.statuses]
+        .filter(([rel, status]) => status.kind === 'added' && changed.has(rel))
+        .map(([rel]) => rel);
       const counted = await Promise.all(
         newFiles.map(async (rel) => {
           const uri = vscode.Uri.file(path.join(root, rel));

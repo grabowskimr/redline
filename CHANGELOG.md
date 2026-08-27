@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.0 — 2026-08-27
+
+**"The last run" is now a comparison between two snapshots of the working tree.** It used to
+be four signals stitched together — `git diff` for tracked files, a separate
+`ls-files --others` walk for new ones, modification times to date them, and a directory of
+copied files to compare against. Each had a hole, and the holes showed: two files created in
+one run where only one appeared, the file whose imports were updated missing entirely.
+
+The largest hole was the untracked walk. It takes about a second in a large repository, so it
+was never blocked on — which meant a file created seconds ago was simply absent from the list
+until some later refresh happened to catch it. Nothing downstream could recover a file that
+was never a candidate.
+
+With the plugin installed, the hook now stages the whole working tree into a throwaway index
+at `UserPromptSubmit` and again at `Stop`, and writes the resulting tree object each time. The
+answer is then one command — `git diff-tree -r -M --name-status <before> <after>`, about 20 ms
+— covering added, deleted, modified and renamed files exactly, with no timestamps and no
+second listing. Your index and working tree are untouched: the repository's own index is
+copied to a scratch file and `GIT_INDEX_FILE` points the staging at that.
+
+- Fixed: files a run created now appear in **Last**, both of them, together with the file
+  whose import changed because of them.
+- Fixed: a file created in an *earlier* run no longer shows up as this run's work, and no
+  longer has to be dated by its modification time to be excluded.
+- Fixed: **Last** compares each file against the snapshot the run started from, so an edit
+  from a previous run in the same file no longer appears in this run's diff.
+- Fixed: deletions and renames carry their status through to the diff, so a rename reads as a
+  move rather than as an unrelated addition and deletion.
+- The panel never waits on a snapshot: it uses the hook's, or takes one in the background and
+  refreshes when it lands. Measured 1.3 s from a shell and up to 5 s inside a busy extension
+  host on a 42k-file repository — far too long to hold a refresh for.
+- Faster where it matters: the first summary after a finished run is two `diff-tree` calls
+  against snapshots the hook already wrote, and needs neither the untracked walk (823-1203 ms
+  here) nor a `stat` per changed file.
+- The hook no longer keeps a directory of copied files as the run's "before" — a tree object
+  does that now. Existing copies are removed at the end of the next run.
+- Requires plugin **0.2.0**: `claude plugin update redline`.
+
 ## 0.3.2 — 2026-08-27
 
 - Fixed: the changes view was unreadable — one file's header repeated down the page over

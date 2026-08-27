@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import * as path from 'node:path';
 import { Config, ARCHIVE_LIMIT } from './config';
 import { Logger } from './logger';
@@ -8,6 +10,7 @@ import { emptyState } from './model/schema';
 import { isOpen, ReviewNote } from './model/note';
 import { GitService } from './git/gitApi';
 import { registerEmptySideProvider, ReviewRange } from './git/reviewRange';
+import { registerTreeSideProvider } from './git/treeSide';
 import { CommentHost } from './comments/commentHost';
 import { NoteIndex } from './view/noteIndex';
 import { CardsViewProvider, CARDS_VIEW_ID } from './view/cardsView';
@@ -46,6 +49,18 @@ export interface RedlineApi {
 
 /** Wall time activation took, reported through the API so it can be asserted, not assumed. */
 let activationCost = 0;
+
+/**
+ * Reads a file out of a snapshot for the diff editor. Bound to the repository named in the
+ * URI rather than to the open folder, so a multi-root window resolves each side correctly.
+ */
+const gitIn = (root: string) => async (args: string[]): Promise<string> => {
+  const { stdout } = await promisify(execFile)('git', ['-c', 'core.quotePath=false', ...args], {
+    cwd: root,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return stdout;
+};
 
 export async function activate(context: vscode.ExtensionContext): Promise<RedlineApi | undefined> {
   const startedAt = Date.now();
@@ -122,7 +137,7 @@ async function activateInner(
   const range = new ReviewRange(store, logger, git);
   const attachments = new Attachments(context, store, logger);
   const watcher = new SessionWatcher(logger);
-  context.subscriptions.push(index, host, range, watcher, registerEmptySideProvider());
+  context.subscriptions.push(index, host, range, watcher, registerEmptySideProvider(), registerTreeSideProvider(gitIn));
   void attachments.cleanupOrphans();
 
   // ── UI ───────────────────────────────────────────────────────────────
