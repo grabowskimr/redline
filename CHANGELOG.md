@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.2 — 2026-08-27
+
+- Fixed: the changes view was unreadable — one file's header repeated down the page over
+  slivers of content. `vscode.changes` does accept an absent resource for a side that does not
+  exist (verified against the command's own implementation), but the multi-file editor lays that
+  out badly. Both sides are always real documents now: an added file compares against an empty
+  one, a deleted file compares to an empty one, and a committed rename uses the path it came
+  from. The empty side is served read-only under its own scheme.
+- Fixed: files created in earlier runs were listed under the last run. Treating every untracked
+  file as current put files from days ago at the top and buried the two or three things that had
+  just changed. New files are dated like everything else; **All** still shows everything
+  unreviewed.
+
 ## 0.3.1 — 2026-08-27
 
 - Fixed: a file created during a run had no visible changes in the diff. It was in the change

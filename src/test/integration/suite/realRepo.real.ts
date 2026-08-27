@@ -85,8 +85,9 @@ describe('against a real repository', () => {
       const pairs = await api.range.diffResources('recent');
       const pair = pairs.find(([u]) => u.fsPath.endsWith(rel));
       assert.ok(pair, 'the new file has a diff pair');
-      console.log(`      new file pair -> left: ${pair[1]?.toString() ?? 'none'}, right: ${pair[2] ? 'file' : 'none'}`);
-      assert.equal(pair[1], undefined, 'a new file has no left-hand side');
+      console.log(`      new file pair -> left: ${pair[1]?.scheme ?? 'none'}, right: ${pair[2]?.scheme ?? 'none'}`);
+      assert.equal(pair[1]?.scheme, 'redline-empty', 'a new file compares against an empty side');
+      assert.equal(pair[2]?.scheme, 'file', 'and the file itself on the right');
     } finally {
       await fs.rm(marker, { force: true });
     }
@@ -125,9 +126,9 @@ describe('against a real repository', () => {
       const pairs = await api.range.diffResources('recent');
       const pair = pairs.find(([uri]) => uri.fsPath.endsWith(victim));
       assert.ok(pair, 'the deleted file has a diff pair');
-      assert.ok(pair[1], 'a left-hand side to compare against');
-      assert.equal(pair[2], undefined, 'and no right-hand side, because the file is gone');
-      console.log(`      left side scheme: ${pair[1]?.scheme}, right side: ${pair[2] ?? 'none'}`);
+      assert.equal(pair[1]?.scheme, 'git', 'the base revision on the left');
+      assert.equal(pair[2]?.scheme, 'redline-empty', 'and an empty side on the right, because it is gone');
+      console.log(`      deleted pair -> left: ${pair[1]?.scheme}, right: ${pair[2]?.scheme}`);
     } finally {
       // Written back rather than checked out: a `git checkout` here competes for the index
       // lock with the extension's own git calls, and losing that race leaves the file deleted.
@@ -173,10 +174,13 @@ describe('against a real repository', () => {
       const s = await api.range.summary();
       const expected = scope === 'recent' ? s?.recentCount : s?.fileCount;
       assert.equal(pairs.length, expected, `${scope}: one pair per file`);
+      // Every entry has both sides, so the editor never has to lay out a missing one.
       for (const [uri, original, modified] of pairs) {
         assert.equal(uri.scheme, 'file');
-        if (modified) assert.equal(modified.fsPath, uri.fsPath);
-        if (original) assert.ok(original.scheme === 'file' || original.scheme === 'git');
+        assert.ok(original, `${uri.fsPath} has a left side`);
+        assert.ok(modified, `${uri.fsPath} has a right side`);
+        assert.ok(['file', 'git', 'redline-empty'].includes(original.scheme), original.scheme);
+        assert.ok(['file', 'redline-empty'].includes(modified.scheme), modified.scheme);
       }
     }
   });

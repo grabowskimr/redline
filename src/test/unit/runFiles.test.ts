@@ -71,10 +71,9 @@ describe('selectRunFiles', () => {
       );
     });
 
-    it('keeps every untracked file, however long ago it was written', () => {
-      // A file that exists in no base has never been reviewed. Dating it against the newest
-      // run hid a file the agent created a prompt or two earlier and had not touched since —
-      // which is the thing most worth reading, not the least.
+    it('dates untracked files, so an older one is not this run\'s work', () => {
+      // Treating every untracked file as current put files created days earlier at the top of
+      // "the last run", burying the few things that had just changed.
       assert.deepEqual(
         selectRunFiles(['brand-new.ts', 'older-untracked.ts'], {
           committed: new Set(),
@@ -83,7 +82,7 @@ describe('selectRunFiles', () => {
           mtimeOf: (f) => (f === 'brand-new.ts' ? mins(3) : mins(-5000)),
           since: RUN_START,
         }),
-        ['brand-new.ts', 'older-untracked.ts'],
+        ['brand-new.ts'],
       );
     });
 

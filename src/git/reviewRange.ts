@@ -34,6 +34,29 @@ const WALK_ATTEMPTS = 5;
 /** A new file larger than this is not read just to count its lines. */
 const MAX_NEW_FILE_SCAN_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Scheme for the empty side of a comparison.
+ *
+ * An added file has nothing at the base and a deleted one has nothing now. `vscode.changes`
+ * accepts an absent resource for that, but the multi-file editor renders a missing side
+ * poorly — a repeated header over sliced content. A real, empty, read-only document is a
+ * side it can lay out like any other, and it reads correctly: everything added, or
+ * everything removed.
+ */
+export const EMPTY_SIDE_SCHEME = 'redline-empty';
+
+/** An empty stand-in that keeps the real path visible in the editor's title. */
+function emptySide(uri: vscode.Uri): vscode.Uri {
+  return uri.with({ scheme: EMPTY_SIDE_SCHEME, query: '', fragment: '' });
+}
+
+/** Serves nothing, for the side of a comparison that does not exist. */
+export function registerEmptySideProvider(): vscode.Disposable {
+  return vscode.workspace.registerTextDocumentContentProvider(EMPTY_SIDE_SCHEME, {
+    provideTextDocumentContent: () => '',
+  });
+}
+
 /** What happened to a path between the base and now. Decides which sides a diff has. */
 type ChangeStatus =
   | { kind: 'added' }
@@ -580,16 +603,13 @@ export class ReviewRange implements vscode.Disposable {
     if (this.snapshot && root) {
       const snap = this.snapshot;
       const snapAt = Date.parse(snap.at);
-      const isNew = new Set(untracked);
       const verdicts = await Promise.all(
         files.map(async (f) => {
-          // Never tracked: unreviewed in its entirety, whichever run wrote it.
-          if (isNew.has(f)) return [f, true] as const;
           // Covered by the snapshot: compare the bytes, which is exact.
           if (snap.has(f)) return [f, await differsFromSnapshot(snap, root, f)] as const;
           // Not covered — it was clean when the run began, or it is untracked, which the
-          // snapshot deliberately does not list. Date it against the run's start instead of
-          // assuming it belongs to this run.
+          // snapshot deliberately does not list. Date it against the run's start, including
+          // new files: one created two runs ago and untouched since is not this run's work.
           const mtime = await this.mtimeOf(f);
           if (mtime === undefined) return [f, true] as const; // deleted: always worth seeing
           return [f, mtime >= snapAt - RUN_GRACE_MS] as const;
@@ -837,9 +857,7 @@ export class ReviewRange implements vscode.Disposable {
   }
 
   /** Left/right pairs for VS Code's multi-file diff editor. */
-  async diffResources(
-    scope: 'recent' | 'all' = 'all',
-  ): Promise<Array<[vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined]>> {
+  async diffResources(scope: 'recent' | 'all' = 'all'): Promise<Array<[vscode.Uri, vscode.Uri, vscode.Uri]>> {
     const summary = await this.summary();
     if (!summary) return [];
     const api = await this.git?.getApi();
@@ -860,13 +878,14 @@ export class ReviewRange implements vscode.Disposable {
       let original: vscode.Uri | undefined;
       const rel = root ? path.relative(root, uri.fsPath) : undefined;
       const stored = snapshot && rel !== undefined ? snapshot.storedPath(rel) : undefined;
-      const modified = gone.has(uri.toString()) ? undefined : uri;
+      const modified = gone.has(uri.toString()) ? emptySide(uri) : uri;
       if (stored !== undefined) return [uri, vscode.Uri.file(stored), modified];
 
       const status = rel !== undefined ? this.statuses.get(rel) : undefined;
-      // Added: nothing on the left, because the path does not exist at the base. Renamed: the
-      // left side is the path it came from, which does.
-      if (status?.kind === 'added') return [uri, undefined, modified];
+      // Added: nothing exists at the base, so the left side is empty and the diff reads as
+      // the whole file arriving. Renamed: the left side is the path it came from, which does
+      // exist there.
+      if (status?.kind === 'added') return [uri, emptySide(uri), modified];
       try {
         const left =
           status?.kind === 'renamed' && root
@@ -874,9 +893,9 @@ export class ReviewRange implements vscode.Disposable {
             : uri;
         original = api?.toGitUri(left, summary.base);
       } catch {
-        original = undefined;
+        original = emptySide(uri);
       }
-      return [uri, original, modified];
+      return [uri, original ?? emptySide(uri), modified];
     });
   }
 

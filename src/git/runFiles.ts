@@ -22,9 +22,9 @@ export interface RunSelection {
   /**
    * Files git does not track yet.
    *
-   * Always part of the review. A file that does not exist in any base has never been looked
-   * at, whichever run created it — and dating it against the newest run hid exactly the thing
-   * most worth reading: a file the agent wrote two prompts ago and has not touched since.
+   * Dated like anything else. Treating every untracked file as part of the current run put
+   * files created days earlier at the top of "the last run", which buries the handful of
+   * things that actually just changed. Use All to see everything that is unreviewed.
    */
   untracked?: ReadonlySet<string>;
   /** Modification time in epoch ms, or undefined when the file is gone or unreadable. */
@@ -54,11 +54,11 @@ export function selectRunFiles(files: readonly string[], selection: RunSelection
     const mtime = selection.mtimeOf(file);
     // Deleted or unreadable: no way to place it, and a deletion is worth seeing.
     if (mtime === undefined) return true;
-    // Never tracked: the whole file is unreviewed work, so it stays in the review.
-    if (selection.untracked?.has(file)) return true;
     if (attributed) {
-      // The hook knows who wrote what, so a timestamp is not needed for anything it names.
-      return attributed.has(file);
+      // The hook knows who wrote what, so a timestamp is not needed for anything it names —
+      // except a file it cannot name, which Bash creating one from scratch is.
+      if (attributed.has(file)) return true;
+      return selection.untracked?.has(file) === true && mtime >= floor;
     }
     return mtime >= floor;
   });

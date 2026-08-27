@@ -7,7 +7,7 @@ import { ReviewStore } from './store/reviewStore';
 import { emptyState } from './model/schema';
 import { isOpen, ReviewNote } from './model/note';
 import { GitService } from './git/gitApi';
-import { ReviewRange } from './git/reviewRange';
+import { registerEmptySideProvider, ReviewRange } from './git/reviewRange';
 import { CommentHost } from './comments/commentHost';
 import { NoteIndex } from './view/noteIndex';
 import { CardsViewProvider, CARDS_VIEW_ID } from './view/cardsView';
@@ -122,7 +122,7 @@ async function activateInner(
   const range = new ReviewRange(store, logger, git);
   const attachments = new Attachments(context, store, logger);
   const watcher = new SessionWatcher(logger);
-  context.subscriptions.push(index, host, range, watcher);
+  context.subscriptions.push(index, host, range, watcher, registerEmptySideProvider());
   void attachments.cleanupOrphans();
 
   // ── UI ───────────────────────────────────────────────────────────────
