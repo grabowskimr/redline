@@ -116,6 +116,9 @@ opened long after the agent finished. The file list is `git diff --name-only <ba
 untracked files, so modified, staged, newly added, deleted, renamed and **committed-during-
 the-session** files all count. Gitignored files do not.
 
+A file git has never tracked is always in the review, whichever run created it: it exists in
+no base, so nothing about it has been read yet.
+
 **Last** narrows that to your most recent request. The boundary is the last thing *you* asked
 for, read from the session transcript, so three requests a few minutes apart stay three
 separate reviews. If no request can be found, the run is cut where the agent was idle longer

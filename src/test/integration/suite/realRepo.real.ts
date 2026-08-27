@@ -71,6 +71,13 @@ describe('against a real repository', () => {
         if (!seen) await new Promise((r) => setTimeout(r, 500));
       }
       assert.ok(seen, `untracked probe ${rel} never appeared`);
+
+      // And in the *last run*, not merely in "all changes": a file that did not exist before
+      // cannot belong to an earlier run, so it has to be part of the newest one.
+      const s = await api.range.summary();
+      assert.ok(s, 'summary');
+      console.log(`      recentSource=${s.recentSource} recent=${s.recentCount}/${s.fileCount}`);
+      assert.ok(s.recent.includes(rel), `a brand-new file is missing from the last run (via ${s.recentSource})`);
     } finally {
       await fs.rm(marker, { force: true });
     }

@@ -23,6 +23,12 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: **a file Claude created did not appear in the last changes.** New files were dated
+  against the newest run, so submitting another prompt after one was created — a reply, say —
+  moved the boundary past it and it vanished. Measured on a real worktree: the file was written
+  at 09:14:16 and the run began at 09:16:46. A file git has never tracked is now always part of
+  the review, whichever run wrote it, because it exists in no base and so nothing about it has
+  been read yet.
 - Fixed: **pressing done did nothing when a follow-up had been typed but not sent.** The card
   cannot collapse while a turn is owed, so a note where you had typed "ok" stayed light,
   went on reading "follow-up not sent", and only swapped its icon. Deciding you are finished

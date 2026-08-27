@@ -567,8 +567,11 @@ export class ReviewRange implements vscode.Disposable {
     if (this.snapshot && root) {
       const snap = this.snapshot;
       const snapAt = Date.parse(snap.at);
+      const isNew = new Set(untracked);
       const verdicts = await Promise.all(
         files.map(async (f) => {
+          // Never tracked: unreviewed in its entirety, whichever run wrote it.
+          if (isNew.has(f)) return [f, true] as const;
           // Covered by the snapshot: compare the bytes, which is exact.
           if (snap.has(f)) return [f, await differsFromSnapshot(snap, root, f)] as const;
           // Not covered — it was clean when the run began, or it is untracked, which the

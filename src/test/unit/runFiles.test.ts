@@ -71,16 +71,32 @@ describe('selectRunFiles', () => {
       );
     });
 
-    it('still dates untracked files, which Bash can create without the hook seeing it', () => {
+    it('keeps every untracked file, however long ago it was written', () => {
+      // A file that exists in no base has never been reviewed. Dating it against the newest
+      // run hid a file the agent created a prompt or two earlier and had not touched since —
+      // which is the thing most worth reading, not the least.
       assert.deepEqual(
-        selectRunFiles(['brand-new.ts', 'old-untracked.ts'], {
+        selectRunFiles(['brand-new.ts', 'older-untracked.ts'], {
           committed: new Set(),
           attributed: new Set(),
-          untracked: new Set(['brand-new.ts', 'old-untracked.ts']),
+          untracked: new Set(['brand-new.ts', 'older-untracked.ts']),
           mtimeOf: (f) => (f === 'brand-new.ts' ? mins(3) : mins(-5000)),
           since: RUN_START,
         }),
-        ['brand-new.ts'],
+        ['brand-new.ts', 'older-untracked.ts'],
+      );
+    });
+
+    it('still excludes a tracked file the agent did not touch', () => {
+      assert.deepEqual(
+        selectRunFiles(['agent.ts', 'yours.ts'], {
+          committed: new Set(),
+          attributed: new Set(['agent.ts']),
+          untracked: new Set(),
+          mtimeOf: () => mins(2),
+          since: RUN_START,
+        }),
+        ['agent.ts'],
       );
     });
 
