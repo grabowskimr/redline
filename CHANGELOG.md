@@ -23,6 +23,10 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: the panel showed a scrollbar with a single card on it. The document was forced to
+  `height: 100%` of a container that already sizes the webview, so it overflowed by whatever
+  the body's own padding added. The content decides the height now, and long unbreakable text
+  stays inside the block that holds it rather than scrolling the panel sideways.
 - Fixed: a file Claude deleted did not appear in the diff. It was in the change list all
   along — the multi-file diff was handed the missing path as the *right* side of the
   comparison, which it cannot open, so the entry did not render. A deleted file now has no

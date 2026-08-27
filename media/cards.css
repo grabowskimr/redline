@@ -7,14 +7,17 @@
   box-sizing: border-box;
 }
 
-html,
-body {
-  height: 100%;
-}
-
+/* Deliberately no `height: 100%`.
+ *
+ * A webview view is already sized to its container, so a document forced to the full height
+ * of that container overflows it by whatever the body's own padding adds — which showed as a
+ * scrollbar on a panel holding a single card. Letting the content decide the height means the
+ * only scrollbar is the one that is actually needed. */
 body {
   margin: 0;
   padding: 0 10px 18px;
+  /* Long unbreakable text belongs to the block that holds it, never to the panel. */
+  overflow-x: hidden;
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
   color: var(--vscode-foreground);
