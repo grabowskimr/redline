@@ -23,6 +23,12 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Changed: a done card is **marked, not faded**. It carries Claude's account of what it
+  changed, so dimming it to 55% opacity made the most useful text on the card the hardest to
+  read. A green left spine and a green status say settled instead.
+- Changed: every action and status in the panel uses a codicon rather than an emoji — the same
+  icon set the kinds and the editor itself use. Emoji sit on their own baseline and render
+  differently on every platform, which is why the row never quite lined up.
 - Fixed: **a file Claude created did not appear in the last changes.** New files were dated
   against the newest run, so submitting another prompt after one was created — a reply, say —
   moved the boundary past it and it vanished. Measured on a real worktree: the file was written

@@ -173,8 +173,14 @@ body {
   border-color: var(--vscode-focusBorder);
   border-left-color: var(--kind-c, var(--accent));
 }
+/* Done, and still worth reading: Claude's account of what it changed lives here, so the card
+   is marked rather than faded. A green spine says "settled" without costing legibility. */
 .card.done {
-  opacity: 0.55;
+  border-left-color: var(--vscode-charts-green);
+}
+.card.done .head .status {
+  color: var(--vscode-charts-green);
+  opacity: 1;
 }
 .card[data-kind='bug'],
 .card[data-kind='security'] {
@@ -240,6 +246,24 @@ body {
 }
 .head .status {
   opacity: 0.8;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.head .status .codicon {
+  font-size: 12px;
+  vertical-align: 0;
+}
+/* Footer buttons hold an icon now, not a character: centre it properly. */
+.actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.sentbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .body {
@@ -327,13 +351,14 @@ body {
   border-color: var(--accent);
 }
 .shot .x {
+  display: none;
   position: absolute;
   top: -5px;
   right: -5px;
-  width: 15px;
-  height: 15px;
-  line-height: 13px;
-  text-align: center;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
   border-radius: 50%;
   background: var(--vscode-badge-background);
   color: var(--vscode-badge-foreground);
@@ -342,7 +367,11 @@ body {
   display: none;
 }
 .shot:hover .x {
-  display: block;
+  display: inline-flex;
+}
+.shot .x .codicon {
+  font-size: 10px;
+  vertical-align: 0;
 }
 
 /* code strips */

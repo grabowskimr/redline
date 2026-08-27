@@ -427,7 +427,7 @@ describe('rendering a card', () => {
       id: 'n1', seq: 1, body: 'x', done: true,
       sent: { changed: true, outcome: 'answered' }, attachments: [],
     });
-    assert.match(html, /✅ done/, "your decision, not the agent's verdict");
+    assert.match(html, /codicon-pass-filled[^>]*><\/span> done/, "your decision, not the agent's verdict");
     assert.match(html, /class="card done settled/, 'dimmed and collapsed');
     assert.match(html, /data-act="remove"/, 'and removable in one click');
   });
@@ -499,5 +499,44 @@ describe('rendering what Claude wrote', () => {
     assert.doesNotMatch(html, /<script>/);
     assert.match(html, /&lt;script&gt;/);
     assert.match(html, /data-open="y"/, 'the link still renders');
+  });
+});
+
+describe('panel iconography', () => {
+  const render = (note: Record<string, unknown>): string => {
+    const h = harness();
+    h.fire('message', {
+      data: {
+        type: 'notes',
+        groups: [{ base: 'a.ts', dir: 'src', notes: [{ kind: 'comment', kindIcon: 'comment', where: 'L1', ...note }] }],
+        sent: [],
+        kinds: [],
+      },
+    });
+    return h.root.innerHTML;
+  };
+
+  it('uses codicons, not emoji, for every action and status', () => {
+    // Kinds have always used the editor's own icon set; the actions used emoji, which sit on a
+    // different baseline and render differently per platform.
+    const html = render({
+      id: 'n1', seq: 1, body: 'x',
+      attachments: [{ src: 'x', path: '/tmp/a.png', name: 'a.png' }],
+    });
+    for (const name of ['codicon-comment', 'codicon-file-media', 'codicon-check', 'codicon-send', 'codicon-kebab-vertical']) {
+      assert.match(html, new RegExp(name), `${name} is used`);
+    }
+    // Listed individually: a character class over these needs the `u` flag to be meaningful,
+    // and the point is the specific glyphs that used to be here.
+    for (const glyph of ['➤', '📎', '↳', '✕', '⋯', '↺']) {
+      assert.ok(!html.includes(glyph), `${glyph} is no longer in the card`);
+    }
+  });
+
+  it('marks a done card rather than fading it', () => {
+    // The card carries Claude's account of what it changed, so it has to stay legible.
+    const html = render({ id: 'n1', seq: 1, body: 'x', done: true, sent: { changed: false, outcome: 'done' } });
+    assert.match(html, /class="card done settled/);
+    assert.match(html, /codicon-pass-filled/, 'and says so with an icon');
   });
 });

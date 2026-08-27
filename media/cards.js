@@ -115,10 +115,10 @@
   function statusOf(n) {
     if (!n.sent) return '';
     const o = n.sent.outcome;
-    if (o === 'done') return '✅ done';
-    if (o === 'skipped') return '⛔ skipped' + (n.sent.reply ? ' — ' + esc(n.sent.reply) : '');
+    if (o === 'done') return icon('pass-filled') + ' done';
+    if (o === 'skipped') return icon('circle-slash') + ' skipped' + (n.sent.reply ? ' — ' + esc(n.sent.reply) : '');
     if (o === 'answered') return '💬 answered';
-    return n.sent.changed ? '✏️ code changed' : '⏳ not addressed yet';
+    return n.sent.changed ? icon('diff-modified') + ' code changed' : icon('clock') + ' not addressed yet';
   }
 
   /** Strip the common leading indentation so code previews hug the left edge. */
@@ -238,7 +238,9 @@
               // screenshot added to a reply could never be taken off again.
               (settled
                 ? ''
-                : '<span class="x" data-unshot="' + esc(a.path) + '" title="Remove screenshot">✕</span>') +
+                : '<span class="x" data-unshot="' + esc(a.path) + '" title="Remove screenshot">' +
+                  icon('close') +
+                  '</span>') +
               '</span>',
           )
           .join('') +
@@ -247,15 +249,15 @@
     // Your own decision outranks the agent's verdict: a note you marked done reads as done,
     // whatever Claude reported about it.
     const status = n.pendingReply
-      ? '✎ follow-up not sent'
+      ? icon('edit') + ' follow-up not sent'
       : n.done
-      ? '✅ done'
+      ? icon('pass-filled') + ' done'
       : n.awaiting
       ? '<span class="codicon codicon-loading codicon-modifier-spin"></span> waiting for Claude'
       : n.sent
       ? statusOf(n)
       : n.orphaned
-      ? '⚠ stale'
+      ? icon('warning') + ' stale'
       : '';
     return (
       '<div class="card' +
@@ -291,7 +293,7 @@
       addenda +
       (settled ? '' : shots + snippet + after + sugg) +
       '<div class="reply"><textarea placeholder="' +
-      (n.sent ? 'Follow-up… (⌘⏎ to save, ➤ to send)' : 'Follow-up… (⌘⏎ to save)') +
+      'Follow-up… (⌘⏎ to save, then send it)' +
       '"></textarea></div>' +
       '<div class="actions">' +
       // Reply is always available: it is how a conversation continues, whatever state the
@@ -299,30 +301,30 @@
       // because a reply often needs a screenshot before it goes.
       btn(
         'reply',
-        '↳',
+        icon('comment'),
         n.sent ? 'Follow-up — continues this conversation with Claude' : 'Follow-up — added before this is sent',
       ) +
       (settled
-        ? btn('reopen', '↺', n.done ? 'Reopen this note' : 'Mark as not done')
+        ? btn('reopen', icon('history'), n.done ? 'Reopen this note' : 'Mark as not done')
         : btn(
             'attach',
-            '📎',
+            icon('file-media'),
             'Attach a screenshot: click to pick a file, paste with ⌘V, or hold ⇧ while dragging an image onto this card',
           ) +
           // Reflects the state it is in: offering "mark done" on a note that is already done
           // means the click quietly undoes it, which reads as the button not working.
-          (n.done ? btn('reopen', '↺', 'Reopen this note') : btn('done', '✓', 'Mark done'))) +
+          (n.done ? btn('reopen', icon('history'), 'Reopen this note') : btn('done', icon('check'), 'Mark done'))) +
       (!n.sent || n.pendingReply
         ? btn(
             'send',
-            '➤',
+            icon('send'),
             n.pendingReply ? 'Send your reply to Claude Code' : 'Send this note to Claude Code',
             'go',
           )
         : '') +
       '<span class="spacer"></span>' +
-      (settled ? btn('remove', '✕', 'Remove this note', 'danger') : '') +
-      btn('more', '⋯', 'More actions…') +
+      (settled ? btn('remove', icon('trash'), 'Remove this note', 'danger') : '') +
+      btn('more', icon('kebab-vertical'), 'More actions…') +
       '</div>' +
       '</div>'
     );
@@ -347,7 +349,7 @@
         '</span><span class="meta">changes unavailable</span></span>' +
         '<span class="controls">' +
         '<button data-global="redline.showLog" title="Show the log">Log</button>' +
-        '<button data-global="redline.pickSession" title="Choose Claude Code session">⇄</button>' +
+        '<button data-global="redline.pickSession" title="Choose Claude Code session">' + icon('arrow-swap') + '</button>' +
         '</span></div>'
       );
     }
@@ -399,7 +401,7 @@
       '</span>' +
       '<span class="controls">' +
       review +
-      '<button data-global="redline.pickSession" title="Choose Claude Code session">⇄</button>' +
+      '<button data-global="redline.pickSession" title="Choose Claude Code session">' + icon('arrow-swap') + '</button>' +
       '</span>' +
       '</div>'
     );
@@ -576,17 +578,17 @@
         if (!n.sent) {
           items.push([
             'suggest',
-            '⇄',
+            icon('diff-single'),
             n.suggestion !== undefined && n.suggestion !== null
               ? 'Edit suggested change'
               : 'Add suggested change',
           ]);
           if (n.suggestion !== undefined && n.suggestion !== null) {
-            items.push(['apply', '▶', 'Apply suggestion to the file']);
+            items.push(['apply', icon('play'), 'Apply suggestion to the file']);
           }
         }
-        items.push(['copy', '⧉', 'Copy this note']);
-        items.push(['delete', '🗑', 'Delete note']);
+        items.push(['copy', icon('copy'), 'Copy this note']);
+        items.push(['delete', icon('trash'), 'Delete note']);
         openPopup(
           el,
           items
