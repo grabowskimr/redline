@@ -127,26 +127,43 @@ export async function snapshotWorkingTree(
 }
 
 /**
+ * Split NUL-separated git output into records.
+ *
+ * `-z` is the only way to get paths out of git verbatim. `core.quotePath=false` stops it
+ * escaping non-ASCII, but a path containing a double quote, a backslash or a newline is still
+ * returned *quoted* — `"quote\\"double.ts"` — and taking that literally means every later
+ * stat, URI and diff for that file is against a path that does not exist.
+ */
+export function nulFields(out: string): string[] {
+  const parts = out.split('\0');
+  while (parts.length > 0 && parts[parts.length - 1] === '') parts.pop();
+  return parts;
+}
+
+/**
  * Paths that differ between two trees or commits, and what happened to each.
  *
  * `-M` detects renames, so moving a file reads as a move rather than as one deletion and one
  * unrelated addition — the single most common shape of an agent's refactor.
+ *
+ * With `-z` the output is a flat run of NUL-terminated records: a status, then its path, and
+ * for a rename the status followed by both paths.
  */
 export async function treeChanges(from: string, to: string, run: GitRunner): Promise<Map<string, TreeChange>> {
-  const out = await run(['diff-tree', '-r', '-M', '--no-color', '--name-status', from, to, '--']);
+  const fields = nulFields(
+    await run(['diff-tree', '-r', '-M', '-z', '--no-color', '--name-status', from, to, '--']),
+  );
   const map = new Map<string, TreeChange>();
-  for (const line of out.split('\n')) {
-    if (!line.trim()) continue;
-    const parts = line.split('\t');
-    const code = (parts[0] ?? '').trim();
-    // A rename is `R100<TAB>old<TAB>new`; everything else is `X<TAB>path`.
-    if ((code.startsWith('R') || code.startsWith('C')) && parts.length >= 3) {
-      const was = parts[1]?.trim();
-      const now = parts[2]?.trim();
+  for (let i = 0; i < fields.length; ) {
+    const code = (fields[i++] ?? '').trim();
+    if (!code) continue;
+    if (code.startsWith('R') || code.startsWith('C')) {
+      const was = fields[i++];
+      const now = fields[i++];
       if (now) map.set(now, was && code.startsWith('R') ? { kind: 'renamed', from: was } : { kind: 'added' });
       continue;
     }
-    const p = parts[1]?.trim();
+    const p = fields[i++];
     if (!p) continue;
     map.set(
       p,
@@ -167,12 +184,22 @@ export async function treeChanges(from: string, to: string, run: GitRunner): Pro
 export async function binaryPaths(from: string, to: string, run: GitRunner): Promise<Set<string>> {
   const out = new Set<string>();
   try {
-    const stdout = await run(['diff-tree', '-r', '-M', '--no-color', '--numstat', from, to, '--']);
-    for (const line of stdout.split('\n')) {
-      const parts = line.split('\t');
-      if (parts[0] !== '-' || parts[1] !== '-') continue;
-      const p = parts[parts.length - 1]?.trim();
-      if (p) out.add(p);
+    const fields = nulFields(
+      await run(['diff-tree', '-r', '-M', '-z', '--no-color', '--numstat', from, to, '--']),
+    );
+    for (let i = 0; i < fields.length; ) {
+      const record = fields[i++];
+      if (record === undefined) break;
+      const bits = record.split('\t');
+      if (bits.length < 3) continue; // not a stat line
+      // A tab is legal in a path, so everything after the two counts is the path.
+      let p = bits.slice(2).join('\t');
+      // A rename's record ends after the counts, and the two paths follow as their own fields.
+      if (p === '') {
+        const was = fields[i++];
+        p = fields[i++] ?? was ?? '';
+      }
+      if (bits[0] === '-' && bits[1] === '-' && p) out.add(p);
     }
   } catch {
     // Not knowing means treating everything as text, which is what it was before.

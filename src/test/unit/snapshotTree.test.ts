@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { binaryPaths, EMPTY_TREE, GitRunner, snapshotWorkingTree, treeChanges } from '../../git/snapshotTree';
+import { binaryPaths, EMPTY_TREE, GitRunner, nulFields, snapshotWorkingTree, treeChanges } from '../../git/snapshotTree';
 
 const execFileP = promisify(execFile);
 
@@ -12,6 +12,16 @@ const execFileP = promisify(execFile);
  * Against real git, because the whole point of this mechanism is what git actually does with
  * a throwaway index. A mock would only assert that the arguments are the ones I wrote.
  */
+describe('NUL-separated git output', () => {
+  it('drops the trailing terminator without losing an empty record in the middle', () => {
+    assert.deepEqual(nulFields('a\0b\0'), ['a', 'b']);
+    assert.deepEqual(nulFields(''), []);
+    assert.deepEqual(nulFields('only\0'), ['only']);
+    // A rename's numstat record legitimately ends in an empty path field.
+    assert.deepEqual(nulFields('0\t0\t\0old\0new\0'), ['0\t0\t', 'old', 'new']);
+  });
+});
+
 describe('working-tree snapshots', () => {
   let repo: string;
   let git: GitRunner;
@@ -166,6 +176,79 @@ describe('working-tree snapshots', () => {
     // Only ours: the temp directory is shared, and a live editor window keeps its own.
     const left = (await scratch()).filter((f) => !before.has(f));
     assert.deepEqual(left, [], 'and left no scratch indexes behind');
+  });
+
+  it('returns paths verbatim, however awkward the name', async () => {
+    // git escapes a path containing a quote, a backslash or a control character unless the
+    // output is NUL-separated — and an escaped path fails every stat, URI and diff after it.
+    const before = await snapshotWorkingTree(repo, git);
+    assert.ok(before);
+    const names = [
+      'ünïcode-ätest.ts',
+      'with space.ts',
+      "quote'single.ts",
+      'quote"double.ts',
+      'back\\slash.ts',
+      '-leading-dash.ts',
+      'sub dir/ünï space.ts',
+      '#hash.ts',
+      'semi;colon.ts',
+      'tab\there.ts',
+    ];
+    for (const n of names) await write(n, 'export const x = 1\n');
+    const after = await snapshotWorkingTree(repo, git);
+    assert.ok(after);
+    const changes = await treeChanges(before, after, git);
+    for (const n of names) {
+      assert.ok(changes.has(n), `${JSON.stringify(n)} came back as ${JSON.stringify([...changes.keys()])}`);
+    }
+  });
+
+  it('keeps a rename straight when both names are awkward', async () => {
+    await write('quote"from.ts', 'export const x = 1\n');
+    await git(['add', '-A']);
+    await git(['commit', '-qm', 'awkward']);
+    const before = await snapshotWorkingTree(repo, git);
+    assert.ok(before);
+    await git(['mv', 'quote"from.ts', 'quote"to.ts']);
+    const after = await snapshotWorkingTree(repo, git);
+    assert.ok(after);
+    const changes = await treeChanges(before, after, git);
+    const moved = changes.get('quote"to.ts');
+    assert.equal(moved?.kind, 'renamed', JSON.stringify([...changes.keys()]));
+    assert.equal((moved as { from: string }).from, 'quote"from.ts');
+  });
+
+  it('tells a binary file from a text one even when the name needs escaping', async () => {
+    const before = await snapshotWorkingTree(repo, git);
+    assert.ok(before);
+    await fs.writeFile(path.join(repo, 'logo"1.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 0]));
+    await write('quote"text.ts', 'export const x = 1\n');
+    const after = await snapshotWorkingTree(repo, git);
+    assert.ok(after);
+    assert.deepEqual([...(await binaryPaths(before, after, git))], ['logo"1.png']);
+  });
+
+  it('survives a repository where every kind of oddity is present at once', async () => {
+    // Each of these has broken something at least once: a dangling link, a file swapped for a
+    // directory, a case-only rename on a case-insensitive volume.
+    await write('swap.ts', 'export const swap = 1\n');
+    await write('Case.ts', 'export const c = 1\n');
+    await git(['add', '-A']);
+    await git(['commit', '-qm', 'oddities']);
+    const before = await snapshotWorkingTree(repo, git);
+    assert.ok(before);
+    await fs.symlink('nowhere.ts', path.join(repo, 'dangling.ts'));
+    await fs.rm(path.join(repo, 'swap.ts'));
+    await write('swap.ts/inner.ts', 'export const inner = 1\n');
+    await git(['mv', '-f', 'Case.ts', 'case.ts']);
+    const after = await snapshotWorkingTree(repo, git);
+    assert.ok(after, 'a tree despite all of it');
+    const changes = await treeChanges(before, after, git);
+    assert.equal(changes.get('swap.ts')?.kind, 'deleted', 'the file it used to be');
+    assert.equal(changes.get('swap.ts/inner.ts')?.kind, 'added', 'the directory it became');
+    assert.ok(changes.has('dangling.ts'), 'a link with no target is still a change');
+    assert.ok(changes.has('case.ts') || changes.has('Case.ts'), 'the case-only rename');
   });
 
   it('gives no answer rather than a wrong one when git cannot help', async () => {

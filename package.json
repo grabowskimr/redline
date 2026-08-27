@@ -2,21 +2,21 @@
   "name": "redline",
   "displayName": "Redline",
   "description": "Review Claude Code's work — inline notes on the lines that need changes, handed back as one prompt.",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "publisher": "marcin",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/marcin/redline"
+    "url": "https://github.com/grabowskimr/redline.git"
   },
   "private": true,
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Other",
+    "AI",
     "SCM Providers",
-    "Notebooks"
+    "Other"
   ],
   "keywords": [
     "redline",
@@ -36,7 +36,8 @@
   "main": "./dist/extension.js",
   "capabilities": {
     "untrustedWorkspaces": {
-      "supported": true
+      "supported": "limited",
+      "description": "Reviewing changes runs git, which executes configuration and filters defined by the repository itself. Notes work in a restricted window; change detection resumes once you trust the folder."
     },
     "virtualWorkspaces": {
       "supported": "limited",
@@ -793,9 +794,10 @@
     "watch": "node esbuild.js --watch",
     "package": "npm run check && npm run compile -- --production && vsce package --no-dependencies",
     "check": "tsc --noEmit -p ./",
+    "check:mirror": "diff -q resources/redline-touched.mjs plugin/hooks/redline-touched.mjs && diff -q resources/redline-touched.sh plugin/hooks/redline-touched.sh",
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.ts\"",
-    "test": "npm run check && npm run check:media && npm run test:unit",
+    "test": "npm run check && npm run check:mirror && npm run check:media && npm run test:unit",
     "test:unit": "tsc -p tsconfig.test.json && mocha \"out/test/unit/**/*.test.js\"",
     "test:integration": "npm run compile && tsc -p tsconfig.test.json && node out/test/integration/runTests.js",
     "vscode:prepublish": "npm run compile -- --production",
@@ -821,5 +823,14 @@
   },
   "dependencies": {
     "minimatch": "^9.0.9"
+  },
+  "bugs": {
+    "url": "https://github.com/grabowskimr/redline/issues"
+  },
+  "homepage": "https://github.com/grabowskimr/redline#readme",
+  "qna": false,
+  "galleryBanner": {
+    "color": "#1f1f1f",
+    "theme": "dark"
   }
 }

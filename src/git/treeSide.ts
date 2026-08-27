@@ -23,13 +23,22 @@ export function treeSide(root: string, tree: string, relPath: string): vscode.Ur
  * no content there, and the diff then reads as the whole file arriving. This is also why a
  * separate empty scheme is no longer needed for the left side of an addition.
  */
-export function registerTreeSideProvider(runFor: (root: string) => GitRunner): vscode.Disposable {
+export function registerTreeSideProvider(
+  runFor: (root: string) => GitRunner,
+  knownRoot: () => Promise<string | undefined>,
+): vscode.Disposable {
   return vscode.workspace.registerTextDocumentContentProvider(TREE_SIDE_SCHEME, {
     provideTextDocumentContent: async (uri) => {
       const params = new URLSearchParams(uri.query);
       const tree = params.get('tree');
       const root = params.get('root');
       if (!tree || !root) return '';
+      // These URIs are only ever built here, but they name a directory to run git in and a
+      // revision to read, so both are checked rather than trusted: only this workspace's
+      // repository, and only something shaped like an object id.
+      if (!/^[0-9a-zA-Z_./^~-]{1,200}$/.test(tree)) return '';
+      const expected = await knownRoot();
+      if (!expected || path.resolve(root) !== path.resolve(expected)) return '';
       const rel = uri.path.replace(/^\//, '');
       try {
         return await runFor(root)(['show', `${tree}:${rel}`]);

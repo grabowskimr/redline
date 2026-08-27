@@ -96,6 +96,23 @@ repaints in place, so a terminal capture is mostly redraw frames and the reply i
 not in it. The terminal and the clipboard are fallbacks.
 
 
+## Requirements, and where it stops
+
+- **VS Code 1.90+**, **git**, and **Claude Code** for anything to do with sessions.
+- **A trusted folder.** Reviewing changes runs git, and a repository defines configuration and
+  filters that git executes — so none of it runs in a restricted window. Notes still work;
+  change detection resumes when you trust the folder.
+- **macOS and Linux** for finding a session to send to: that reads the process table. Notes,
+  the panel and the whole review side work anywhere, and with the plugin installed a batch can
+  be delivered on any platform by typing one word.
+- **One repository per window.** In a multi-root workspace Redline reviews the first folder
+  that is a git repository. Notes are grouped per folder; the change range is not.
+- **One session at a time per worktree.** Two Claude Code sessions working in the *same*
+  worktree overwrite each other's run markers; Redline notices the mismatch and falls back to
+  the slower, wider answer rather than reporting a run built from both. Separate worktrees are
+  unaffected — which is what worktrees are for.
+- **A gitignored file is never in a review.** If Claude writes one, nothing here will show it.
+
 ## What "changed" means
 
 The review range is resolved for you, in this order:
@@ -150,7 +167,7 @@ injects the whole review into its context. No pasting kilobytes into a terminal.
 Redline works on its own. The plugin makes it exact and quiet:
 
 ```sh
-claude plugin marketplace add /path/to/redline     # this repo, or the installed extension
+claude plugin marketplace add grabowskimr/redline
 claude plugin install redline@redline
 ```
 
@@ -196,7 +213,7 @@ it uses the hook's, or takes one in the background and refreshes when it lands.
 did that, remove those entries once the plugin is installed, or every hook runs twice —
 **Redline: Set Up Claude Code Plugin** checks for exactly that and tells you.
 
-## Notes## Notes
+## Notes
 
 - **Kinds** shape how the agent treats a note. The widget has one-click 🐞 bug · 💭 question ·
   💡 idea; **Set Kind…** lists them all. Prefixes work too: `? why`, `! crash`, `* what if`,
@@ -263,6 +280,7 @@ finishes while VS Code is open pings you with the diff.
 | `redline.claudeAutoSubmit` | `true` | Press Enter for you in the session |
 | `redline.clearDoneAfterReport` | `false` | Remove notes Claude reported as done, instead of leaving them for a reply |
 | `redline.watchSessions` | `true` | Watch the session and offer the diff when a run ends |
+| `redline.onRunFinished` | `notify` | When a run ends: `notify`, `open` the diff, or `nothing` |
 | `redline.excludeGlobs` | `node_modules`, `dist`, `*.min.*`, `.git` | No `+` in these files |
 | `redline.maxFileLines` | `50000` | No `+` in files longer than this |
 | `redline.showStatusBar` | `true` | Note and changed-file counts in the status bar |
@@ -294,6 +312,17 @@ Override it, or tune the rest, in your settings:
 
 No network access of any kind, no telemetry. Git and session information is read locally;
 nothing leaves the machine until you paste it yourself.
+
+What is written, and where:
+
+- **Notes** in VS Code's own workspace storage, never in your repository.
+- **Screenshots** you attach, in the extension's storage directory — also outside the repository.
+- **The plugin's state** in `~/.claude/redline/<folder>/`: which files each run touched, the
+  snapshots that bound a run, and a batch of feedback while it waits to be collected. Delete
+  the directory at any time; it is rebuilt on the next run.
+- **Snapshot objects** in your repository's own object store, unreachable, exactly as
+  `git stash create` leaves its own. Redline creates no refs, branches or commits, and never
+  writes to your index or working tree. Git prunes them on its usual schedule.
 
 ## Renamed from Local Review
 

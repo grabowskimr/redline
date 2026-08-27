@@ -20,6 +20,8 @@ export interface RunTree {
   at: string;
   /** Tree object hash. */
   tree: string;
+  /** The session the snapshot belongs to, from hooks that record it. */
+  session?: string;
 }
 
 export interface RunTrees {
@@ -106,11 +108,15 @@ export async function readRunTrees(root: string, home?: string): Promise<RunTree
   ]);
   const trees: RunTrees = {};
   const before = started?.before;
-  if (isTree(before)) trees.before = before;
+  if (isTree(before)) {
+    trees.before = { at: before.at, tree: before.tree };
+    if (typeof (before as RunTree).session === 'string') trees.before.session = (before as RunTree).session;
+  }
   // The stop marker names a tree only from the version of the hook that records one, and only
   // for a run that has actually ended.
   if (stopped && typeof stopped.tree === 'string' && typeof stopped.at === 'string') {
-    const after = { at: stopped.at, tree: stopped.tree };
+    const after: RunTree = { at: stopped.at, tree: stopped.tree };
+    if (typeof stopped.session === 'string') after.session = stopped.session;
     if (isTree(after)) trees.after = after;
   }
   if (!trees.before && !trees.after) return undefined;

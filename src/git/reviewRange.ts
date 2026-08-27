@@ -11,7 +11,7 @@ import { RUN_GRACE_MS, selectRunFiles } from './runFiles';
 import { touchedPathsSince } from '../claude/touched';
 import { differsFromSnapshot, readSnapshot, RunSnapshot } from '../claude/snapshot';
 import { readRunTrees, RunTree, RunTrees } from '../claude/runTrees';
-import { binaryPaths, GitRunner, snapshotWorkingTree, treeChanges, TreeChange } from './snapshotTree';
+import { binaryPaths, GitRunner, nulFields, snapshotWorkingTree, treeChanges, TreeChange } from './snapshotTree';
 import { treeSide } from './treeSide';
 
 const execFileP = promisify(execFile);
@@ -92,6 +92,14 @@ const BASE_CACHE_MS = 4_000;
  * costs nothing to read, so this only paces the panel while the agent is still writing.
  */
 const TREE_CACHE_MS = 4_000;
+
+/**
+ * How long "this is not a git repository" is believed for. Short, because `git init` should
+ * not need a window reload — long enough that a folder without a repository costs nothing.
+ */
+const ROOT_MISS_MS = 30_000;
+/** Finding the root is one cheap call; anything longer means git is wedged. */
+const ROOT_TIMEOUT_MS = 10_000;
 
 /** Beyond this a snapshot is not worth waiting for, and the older signals cover the gap. */
 const SNAPSHOT_TIMEOUT_MS = 30_000;
@@ -228,6 +236,7 @@ export class ReviewRange implements vscode.Disposable {
    * parallelising them saved 17%, not spawning them saves all of it.
    */
   private floorCache: { at: number; sha: string | undefined } | undefined;
+  private rootCache: { at: number; root: string | undefined } | undefined;
   private headCache: { at: number; sha: string } | undefined;
   private timer: NodeJS.Timeout | undefined;
 
@@ -257,6 +266,18 @@ export class ReviewRange implements vscode.Disposable {
       watcher.onDidCreate(onFsAddOrRemove),
       watcher.onDidDelete(onFsAddOrRemove),
       vscode.workspace.onDidSaveTextDocument((d) => onFsEvent(d.uri)),
+      // A folder added or removed can change which repository this is, or introduce one.
+      vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        this.root = undefined;
+        this.rootCache = undefined;
+        this.invalidate(true);
+      }),
+      // Trust turns the whole feature on, and nothing has been computed until now.
+      vscode.workspace.onDidGrantWorkspaceTrust(() => {
+        this.root = undefined;
+        this.rootCache = undefined;
+        this.invalidate(true);
+      }),
     );
     // Warmed in the background: the first list is the expensive one, and nobody should be
     // waiting on it when it happens.
@@ -266,6 +287,11 @@ export class ReviewRange implements vscode.Disposable {
   // ── git plumbing ──────────────────────────────────────────────────────
 
   private async run(args: string[], env?: Record<string, string>, timeoutMs?: number): Promise<string> {
+    // A repository controls its own git configuration, `.gitattributes` filters and
+    // `core.fsmonitor`, all of which git will execute. Running any of this before the user has
+    // said they trust the folder would hand a hostile repository the ability to run code, so
+    // the whole feature waits — which is what the manifest declares as "limited" support.
+    if (!vscode.workspace.isTrusted) throw new Error('the workspace is not trusted');
     const root = await this.repoRoot();
     if (!root) throw new Error('not a git repository');
     // core.quotePath is on by default, which would return `"caf\303\251.ts"` for
@@ -292,16 +318,36 @@ export class ReviewRange implements vscode.Disposable {
 
   /** The repository root — `git diff` prints paths relative to it, not to the open folder. */
   async repoRoot(): Promise<string | undefined> {
+    // Nothing that reads a repository runs before the folder is trusted, including this: it is
+    // the gate every other path goes through, so refusing here makes the whole feature inert
+    // rather than half-live.
+    if (!vscode.workspace.isTrusted) return undefined;
     if (this.root) return this.root;
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!folder) return undefined;
-    try {
-      const { stdout } = await execFileP('git', ['rev-parse', '--show-toplevel'], { cwd: folder });
-      this.root = stdout.trim() || folder;
-    } catch {
-      this.root = undefined;
+    // A negative answer is cached too, briefly. Without that, a window open on a folder that
+    // is not a repository spawned `git rev-parse` on every call — and the workspace-wide
+    // watcher makes those calls continuously while anything writes files.
+    if (this.rootCache && Date.now() - this.rootCache.at < ROOT_MISS_MS) return this.rootCache.root;
+    // Every folder, not just the first: in a multi-root workspace the repository is often not
+    // the folder that happens to be listed first, and taking only that one left the whole
+    // feature dead with no explanation.
+    for (const folder of (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)) {
+      try {
+        const { stdout } = await execFileP('git', ['rev-parse', '--show-toplevel'], {
+          cwd: folder,
+          timeout: ROOT_TIMEOUT_MS,
+        });
+        const root = stdout.trim();
+        if (root) {
+          this.root = root;
+          this.rootCache = { at: Date.now(), root };
+          return root;
+        }
+      } catch {
+        // not a repository, or git is unavailable; try the next folder
+      }
     }
-    return this.root;
+    this.rootCache = { at: Date.now(), root: undefined };
+    return undefined;
   }
 
   // ── base resolution ───────────────────────────────────────────────────
@@ -646,7 +692,20 @@ export class ReviewRange implements vscode.Disposable {
     const trees = await this.runTrees(root, resolved.run);
     const before = trees?.before;
     if (!before) return undefined;
-    const now = await this.currentTree(root, Date.parse(before.at), trees?.after);
+    // Two sessions working in one repository overwrite each other's markers, so a "before"
+    // recorded by one session and a "stop" from another describe different runs. Falling back
+    // to the older signals gives a wider answer; pairing them would give a wrong one.
+    const after = trees?.after;
+    const pairedSession =
+      before.session === undefined || after?.session === undefined || before.session === after.session;
+    if (!pairedSession) {
+      this.logger.info(
+        `two sessions have run here: the snapshot is from ${before.session?.slice(0, 8)} and the stop from ` +
+          `${after?.session?.slice(0, 8)}, so the last run is measured the slower way`,
+      );
+      return undefined;
+    }
+    const now = await this.currentTree(root, Date.parse(before.at), after);
     if (!now) return undefined;
 
     let all: Map<string, ChangeStatus>;
@@ -913,8 +972,7 @@ export class ReviewRange implements vscode.Disposable {
 
   /** Tracked paths that differ between two commits — what was committed during the run. */
   private async changedBetween(from: string, to: string): Promise<string[]> {
-    const out = await this.run(['diff', '--name-only', '--no-color', from, to, '--']);
-    return out.split('\n').map((f) => f.trim()).filter(Boolean);
+    return nulFields(await this.run(['diff', '--name-only', '-z', '--no-color', from, to, '--']));
   }
 
   private async exists(uri: vscode.Uri): Promise<boolean> {
@@ -951,22 +1009,24 @@ export class ReviewRange implements vscode.Disposable {
    * missing path for a file that was deleted.
    */
   private async changedSinceWithStatus(base: string): Promise<Map<string, ChangeStatus>> {
-    const out = await this.run(['diff', '--name-status', '--no-color', base, '--']);
+    const fields = nulFields(await this.run(['diff', '--name-status', '-z', '--no-color', base, '--']));
     const map = new Map<string, ChangeStatus>();
-    for (const line of out.split('\n')) {
-      if (!line.trim()) continue;
-      const parts = line.split('\t');
-      const code = (parts[0] ?? '').trim();
-      // A rename is `R100<TAB>old<TAB>new`; everything else is `X<TAB>path`.
-      if (code.startsWith('R') && parts.length >= 3) {
-        const from = parts[1]?.trim();
-        const to = parts[2]?.trim();
-        if (to) map.set(to, from ? { kind: 'renamed', from } : { kind: 'added' });
+    for (let i = 0; i < fields.length; ) {
+      const code = (fields[i++] ?? '').trim();
+      if (!code) continue;
+      // A rename is three records: the status, the old path and the new one.
+      if (code.startsWith('R') || code.startsWith('C')) {
+        const was = fields[i++];
+        const now = fields[i++];
+        if (now) map.set(now, was && code.startsWith('R') ? { kind: 'renamed', from: was } : { kind: 'added' });
         continue;
       }
-      const p = parts[1]?.trim();
+      const p = fields[i++];
       if (!p) continue;
-      map.set(p, code.startsWith('A') ? { kind: 'added' } : code.startsWith('D') ? { kind: 'deleted' } : { kind: 'modified' });
+      map.set(
+        p,
+        code.startsWith('A') ? { kind: 'added' } : code.startsWith('D') ? { kind: 'deleted' } : { kind: 'modified' },
+      );
     }
     return map;
   }
@@ -1004,8 +1064,7 @@ export class ReviewRange implements vscode.Disposable {
     if (this.untrackedRefresh) return this.untrackedRefresh;
     this.untrackedRefresh = (async () => {
       try {
-        const out = await this.run(['ls-files', '--others', '--exclude-standard']);
-        const files = out.split('\n').map((f) => f.trim()).filter(Boolean);
+        const files = nulFields(await this.run(['ls-files', '--others', '--exclude-standard', '-z']));
         const changed =
           this.untrackedCache === undefined ||
           this.untrackedCache.files.length !== files.length ||

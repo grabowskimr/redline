@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.0.0 — 2026-08-27
+
+A pass over the whole extension for a public release. Nine findings, in the order they would
+bite someone.
+
+**A path git had to escape was the wrong path.** `core.quotePath=false` stops git escaping
+non-ASCII, which is why `café.ts` worked — but a name containing a double quote, a backslash or
+a control character is *still* returned quoted: `"quote\"double.ts"`. Every listing took that
+literally, so the file appeared under a name that does not exist and every stat, diff side and
+hunk for it failed. Every listing now asks for `-z` (NUL-separated, no quoting at all), and
+patch headers — which cannot be asked for `-z` — are unquoted, octal escapes included.
+
+**Git ran in workspaces the user had not trusted.** A repository defines its own configuration,
+`.gitattributes` filters and `core.fsmonitor`, all of which git executes. The manifest claimed
+full support for untrusted workspaces, so opening a hostile repository was enough to run its
+code. Support is now declared `limited` and nothing that reads a repository runs until the
+folder is trusted; it starts the moment you trust it, with no reload.
+
+**A folder that is not a repository cost a `git` spawn per call, forever.** The negative answer
+was never cached, and the workspace-wide watcher keeps asking for as long as anything writes
+files.
+
+- Fixed: in a multi-root workspace, only the first folder was ever examined — if the repository
+  was the second one, the whole feature was dead with no explanation. Every folder is tried, and
+  the README says plainly that one repository per window is the limit.
+- Fixed: session discovery ran `ps`, and an `lsof` per Claude process, on every panel update —
+  which meant on every keystroke-sized change to a note. Cached for five seconds and coalesced.
+- Fixed: two Claude Code sessions in one worktree overwrite each other's run markers. Each end
+  of a run now records its session, and a mismatched pair falls back to the wider answer instead
+  of reporting a run assembled from both.
+- Fixed: the diff editor's snapshot provider trusted the repository path in its own URI. It now
+  serves only this workspace's repository, and only a revision shaped like one.
+- Fixed: `~/.claude`-driven work started from a file watcher had nowhere to report a failure, so
+  a rejection surfaced as a bare extension error. Logged with context instead.
+- Packaging: dev scripts and any stray build directory are excluded — one scratch directory of
+  compiled tests came within a command of being published. A check now refuses to package if
+  the two copies of the hook script have drifted apart.
+- Metadata: the repository URL pointed at a repository that does not exist, the categories
+  claimed "Notebooks", and there was no issues or homepage link.
+- Verified against a repository built to be awkward: no commits at all, detached HEAD, a
+  dangling symlink, a file replaced by a directory, a case-only rename on a case-insensitive
+  volume, a submodule, an unreadable file, and names containing quotes, backslashes, tabs,
+  newlines, spaces and leading dashes.
+- Requires plugin **0.2.2**: `claude plugin update redline`.
+
 ## 0.5.0 — 2026-08-27
 
 **Runs you start yourself now show up.** A prompt typed straight into a Claude Code session —

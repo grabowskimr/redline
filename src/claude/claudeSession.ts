@@ -110,7 +110,37 @@ export async function orcaTerminals(): Promise<OrcaTerminal[]> {
  * Find running Claude Code sessions as deliverable targets. Best-effort, macOS/Linux.
  * Sorted: in-workspace first, then reachable ones.
  */
+/**
+ * Discovery is expensive — `ps` for the process table and, on macOS, an `lsof` per Claude
+ * process to find its working directory. The panel asks for this whenever a note changes,
+ * whenever it becomes visible and on a timer, so the answer is reused briefly. Sessions do not
+ * come and go faster than this.
+ */
+const TARGETS_CACHE_MS = 5_000;
+let targetsCache: { at: number; targets: SessionTarget[] } | undefined;
+let targetsInFlight: Promise<SessionTarget[]> | undefined;
+
 export async function findTargets(logger: Logger): Promise<SessionTarget[]> {
+  if (targetsCache && Date.now() - targetsCache.at < TARGETS_CACHE_MS) return targetsCache.targets;
+  // Several callers can ask at once — the panel's notes and session posts land together.
+  if (targetsInFlight) return targetsInFlight;
+  targetsInFlight = discoverTargets(logger)
+    .then((targets) => {
+      targetsCache = { at: Date.now(), targets };
+      return targets;
+    })
+    .finally(() => {
+      targetsInFlight = undefined;
+    });
+  return targetsInFlight;
+}
+
+/** Terminals are only valid for the window that owns them, so a fresh look is sometimes right. */
+export function forgetTargets(): void {
+  targetsCache = undefined;
+}
+
+async function discoverTargets(logger: Logger): Promise<SessionTarget[]> {
   let procs: Proc[];
   try {
     procs = await listProcesses();

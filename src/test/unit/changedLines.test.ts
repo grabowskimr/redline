@@ -1,5 +1,5 @@
 import * as assert from 'node:assert/strict';
-import { parseDiffByFile, parseHunks } from '../../git/hunks';
+import { headerPath, parseDiffByFile, parseHunks, unquotePath } from '../../git/hunks';
 
 describe('parseHunks', () => {
   it('parses hunk headers into 0-based inclusive ranges on the new side', () => {
@@ -82,5 +82,39 @@ describe('parseDiffByFile deletions', () => {
   it('handles a new file (no old side)', () => {
     const diff = ['--- /dev/null', '+++ b/new.ts', '@@ -0,0 +1,2 @@', '+x', '+y'].join('\n');
     assert.deepEqual(parseDiffByFile(diff), [{ path: 'new.ts', hunks: [{ start: 0, end: 1 }] }]);
+  });
+});
+
+describe('paths that git escapes in a patch header', () => {
+  it('recovers a name with a double quote in it', () => {
+    const diff = [
+      'diff --git "a/quote\\"x.ts" "b/quote\\"x.ts"',
+      '--- "a/quote\\"x.ts"',
+      '+++ "b/quote\\"x.ts"',
+      '@@ -1,0 +1,1 @@',
+      '+added',
+    ].join('\n');
+    assert.deepEqual(parseDiffByFile(diff).map((f) => f.path), ['quote"x.ts']);
+  });
+
+  it('recovers a name with a newline, which arrives octal-escaped', () => {
+    const diff = ['--- "a/line\\nbreak.ts"', '+++ "b/line\\nbreak.ts"', '@@ -1 +1 @@', '+x'].join('\n');
+    assert.deepEqual(parseDiffByFile(diff).map((f) => f.path), ['line\nbreak.ts']);
+  });
+
+  it('decodes the octal bytes of a multi-byte character', () => {
+    // What git emits for `café.ts` when quoting is on: two octal escapes for one character.
+    assert.equal(unquotePath('"caf\\303\\251.ts"'), 'café.ts');
+  });
+
+  it('leaves an ordinary path alone, quotes and all', () => {
+    assert.equal(unquotePath('src/plain.ts'), 'src/plain.ts');
+    assert.equal(headerPath('b/src/plain.ts'), 'src/plain.ts');
+    assert.equal(headerPath('"b/odd\\tname.ts"'), 'odd\tname.ts');
+  });
+
+  it('still keeps a deleted file under its old name', () => {
+    const diff = ['--- a/gone.ts', '+++ /dev/null', '@@ -1,2 +0,0 @@', '-one', '-two'].join('\n');
+    assert.deepEqual(parseDiffByFile(diff).map((f) => f.path), ['gone.ts']);
   });
 });

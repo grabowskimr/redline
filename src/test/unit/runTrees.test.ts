@@ -51,6 +51,19 @@ describe('run trees recorded by the hook', () => {
     assert.equal(trees?.after, undefined);
   });
 
+  it('carries the session each end of the run belongs to', async () => {
+    await started({ before: { at: '2026-08-27T10:00:00.000Z', tree: A, session: 'one' } });
+    await stopped({ at: '2026-08-27T10:04:00.000Z', session: 'two', tree: B });
+    const trees = await readRunTrees(repo, home);
+    assert.equal(trees?.before?.session, 'one');
+    assert.equal(trees?.after?.session, 'two', 'a different session stopped — a mismatched pair');
+  });
+
+  it('leaves the session unset for a hook version that does not record it', async () => {
+    await started({ before: { at: '2026-08-27T10:00:00.000Z', tree: A } });
+    assert.equal((await readRunTrees(repo, home))?.before?.session, undefined);
+  });
+
   it('rejects anything that is not a tree hash, rather than passing it to git', async () => {
     await started({ before: { at: '2026-08-27T10:00:00.000Z', tree: 'HEAD; rm -rf /' } });
     assert.equal(await readRunTrees(repo, home), undefined);

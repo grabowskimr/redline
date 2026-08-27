@@ -144,11 +144,13 @@ async function bashEnd(root, sessionId) {
   } catch {
     return; // no matching start; attributing the whole diff would be a lie
   }
-  const { stdout } = await execFileP('git', ['-c', 'core.quotePath=false', 'diff', '--name-only', 'HEAD'], {
+  // `-z` so a path containing a quote, a backslash or a newline comes back verbatim rather
+  // than escaped — an escaped one fails every stat below and is silently dropped.
+  const { stdout } = await execFileP('git', ['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', 'HEAD'], {
     cwd: root,
     maxBuffer: 16 * 1024 * 1024,
   });
-  const changed = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  const changed = stdout.split('\0').filter(Boolean);
   const touched = [];
   for (const rel of changed) {
     try {
@@ -216,7 +218,7 @@ const SNAPSHOT_TIMEOUT_MS = 30_000;
  * moved. The end-of-run tree rides along with the stop marker instead, so neither event can
  * ever be mistaken for the other.
  */
-async function recordRunStart(root) {
+async function recordRunStart(root, sessionId) {
   const tree = await snapshotTree(root);
   if (!tree) return;
   const dir = logDir(root);
@@ -224,7 +226,14 @@ async function recordRunStart(root) {
   const file = join(dir, 'runs.json');
   const temp = `${file}.tmp`;
   // Renamed into place: Redline could otherwise read a half-written file and see no run at all.
-  await writeFile(temp, JSON.stringify({ before: { at: new Date().toISOString(), tree } }), 'utf8');
+  // The session is recorded so the two ends of a run can be checked against each other: two
+  // sessions working in one repository overwrite each other's marker, and a "before" from a
+  // different session than the one that stopped describes a different run.
+  await writeFile(
+    temp,
+    JSON.stringify({ before: { at: new Date().toISOString(), tree, session: sessionId || '' } }),
+    'utf8',
+  );
   await rename(temp, file);
 }
 
@@ -323,7 +332,7 @@ try {
         },
       };
     }
-    await recordRunStart(root);
+    await recordRunStart(root, sessionId);
   } else if (event === 'Stop') {
     // Deliberately not SubagentStop: a turn using subagents fires that once per subagent,
     // and each one would look like the end of the run.

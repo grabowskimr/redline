@@ -7,6 +7,9 @@ import { Logger } from '../logger';
 
 const execFileP = promisify(execFile);
 
+/** Where the plugin is published. Stable across extension updates, unlike an install path. */
+const MARKETPLACE = 'grabowskimr/redline';
+
 /**
  * Setting up the Claude Code side of Redline.
  *
@@ -69,8 +72,12 @@ async function openSettings(): Promise<void> {
 }
 
 export async function setUpHook(context: vscode.ExtensionContext, logger: Logger): Promise<void> {
-  const commands =
-    `claude plugin marketplace add "${context.extensionUri.fsPath}"\n` + 'claude plugin install redline@redline';
+  // From the repository, not from this directory. An extension's install path carries its
+  // version, so a marketplace registered against it stops resolving the moment the extension
+  // updates — and `claude plugin update` then fails with nothing to point at. The local path is
+  // offered underneath for anyone working offline or on an unreleased build.
+  const commands = `claude plugin marketplace add ${MARKETPLACE}\nclaude plugin install redline@redline`;
+  const offline = `claude plugin marketplace add "${context.extensionUri.fsPath}"`;
 
   const [state, manual] = await Promise.all([pluginState(logger), manualHookEvents()]);
   const installed = state.installed;
@@ -110,7 +117,10 @@ export async function setUpHook(context: vscode.ExtensionContext, logger: Logger
   }
 
   await vscode.env.clipboard.writeText(commands);
-  const doc = await vscode.workspace.openTextDocument({ language: 'shellscript', content: `${commands}\n` });
+  const doc = await vscode.workspace.openTextDocument({
+    language: 'shellscript',
+    content: `${commands}\n\n# Offline, or testing a build that is not released yet:\n# ${offline}\n`,
+  });
   await vscode.window.showTextDocument(doc, { preview: false });
 
   const tail =

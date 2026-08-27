@@ -64,6 +64,9 @@ let activationCost = 0;
  * URI rather than to the open folder, so a multi-root window resolves each side correctly.
  */
 const gitIn = (root: string) => async (args: string[]): Promise<string> => {
+  // Same reason as everywhere else git runs: a repository defines filters and configuration
+  // that git will execute, so none of it runs until the folder is trusted.
+  if (!vscode.workspace.isTrusted) return '';
   const { stdout } = await promisify(execFile)('git', ['-c', 'core.quotePath=false', ...args], {
     cwd: root,
     maxBuffer: 32 * 1024 * 1024,
@@ -146,7 +149,7 @@ async function activateInner(
   const range = new ReviewRange(store, logger, git);
   const attachments = new Attachments(context, store, logger);
   const watcher = new SessionWatcher(logger);
-  context.subscriptions.push(index, host, range, watcher, registerEmptySideProvider(), registerTreeSideProvider(gitIn));
+  context.subscriptions.push(index, host, range, watcher, registerEmptySideProvider(), registerTreeSideProvider(gitIn, () => range.repoRoot()));
   // Housekeeping for snapshots a killed window could not clean up after itself.
   void sweepScratchIndexes();
   void attachments.cleanupOrphans();
@@ -274,16 +277,19 @@ async function activateInner(
     signals.onDidStartRun(() => {
       // A new request: the boundary really has moved, and the panel should say so at once.
       range.invalidateBase();
-      void cards.postSession();
+      cards.postSession().catch((err) => logger.trace(`session post failed: ${String(err)}`));
     }),
     signals.onDidEndRun(() => {
       signalCounts.ended++;
       range.invalidateBase();
-      void cards.postSession();
+      cards.postSession().catch((err) => logger.trace(`session post failed: ${String(err)}`));
       // Deliberately not conditional on finding a session to send to. The hook's marker is
       // the record that a run happened here, and it is written the same whether the prompt
       // came from Redline or from someone typing in a Claude Code session in any terminal.
-      void batch.onHookRunFinished();
+      //
+      // Caught rather than voided: this runs from a file watcher, so a rejection has nowhere
+      // to go and would surface as an extension error with no context about what caused it.
+      batch.onHookRunFinished().catch((err) => logger.warn('could not report the finished run', err));
     }),
   );
   const attachMonitor = async (): Promise<void> => {

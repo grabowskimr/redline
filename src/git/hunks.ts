@@ -28,23 +28,68 @@ export interface FileHunks {
  * (`+c,0`), which are represented as a single-line marker at the join point — without
  * this, a file where only lines were removed would disappear from "what changed".
  */
+/**
+ * Undo git's C-style path quoting.
+ *
+ * Patch headers cannot be asked for NUL-separated output the way listings can, so a path
+ * containing a double quote, a backslash or a control character arrives wrapped in quotes with
+ * escapes — `"quote\\"double.ts"`. Taken literally, every hunk lands on a path that does not
+ * exist. `core.quotePath=false` does not help: it only stops non-ASCII being escaped.
+ */
+/**
+ * The repository-relative path from a `---`/`+++` header.
+ *
+ * The quoting wraps the *whole* field, prefix included — `"b/line\\nbreak.ts"` — so it has to
+ * be undone before the `a/` or `b/` prefix can be stripped, not after.
+ */
+export function headerPath(field: string): string {
+  return unquotePath(field).replace(/^[ab]\//, '');
+}
+
+export function unquotePath(raw: string): string {
+  if (!raw.startsWith('"') || !raw.endsWith('"') || raw.length < 2) return raw;
+  const body = raw.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch !== '\\') {
+      bytes.push(...Buffer.from(ch ?? '', 'utf8'));
+      continue;
+    }
+    const next = body[++i];
+    if (next === undefined) break;
+    // Octal escapes carry the raw bytes of a multi-byte character, so they are collected as
+    // bytes and decoded together at the end.
+    if (next >= '0' && next <= '7') {
+      const octal = next + (body[i + 1] ?? '') + (body[i + 2] ?? '');
+      const digits = /^[0-7]{1,3}/.exec(octal)?.[0] ?? next;
+      i += digits.length - 1;
+      bytes.push(parseInt(digits, 8) & 0xff);
+      continue;
+    }
+    const simple: Record<string, number> = { n: 10, t: 9, r: 13, f: 12, b: 8, v: 11, a: 7 };
+    bytes.push(simple[next] ?? Buffer.from(next, 'utf8')[0] ?? 0);
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
 export function parseDiffByFile(diff: string): FileHunks[] {
   const out: FileHunks[] = [];
   let current: FileHunks | undefined;
   let oldPath: string | undefined;
   for (const line of diff.split('\n')) {
-    const o = /^--- a\/(.*)$/.exec(line);
+    const o = /^--- (?!\/dev\/null$)(.*)$/.exec(line);
     if (o) {
-      oldPath = o[1];
+      oldPath = headerPath(o[1] ?? '');
       continue;
     }
     if (line.startsWith('--- /dev/null')) {
       oldPath = undefined;
       continue;
     }
-    const f = /^\+\+\+ b\/(.*)$/.exec(line);
+    const f = /^\+\+\+ (?!\/dev\/null$)(.*)$/.exec(line);
     if (f) {
-      current = { path: f[1] ?? '', hunks: [] };
+      current = { path: headerPath(f[1] ?? ''), hunks: [] };
       out.push(current);
       continue;
     }
