@@ -642,6 +642,15 @@ export class ReviewRange implements vscode.Disposable {
     return out.split('\n').map((f) => f.trim()).filter(Boolean);
   }
 
+  private async exists(uri: vscode.Uri): Promise<boolean> {
+    try {
+      await vscode.workspace.fs.stat(uri);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async mtimeOf(file: string): Promise<number | undefined> {
     const root = await this.repoRoot();
     if (!root) return undefined;
@@ -786,7 +795,9 @@ export class ReviewRange implements vscode.Disposable {
   }
 
   /** Left/right pairs for VS Code's multi-file diff editor. */
-  async diffResources(scope: 'recent' | 'all' = 'all'): Promise<Array<[vscode.Uri, vscode.Uri | undefined, vscode.Uri]>> {
+  async diffResources(
+    scope: 'recent' | 'all' = 'all',
+  ): Promise<Array<[vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined]>> {
     const summary = await this.summary();
     if (!summary) return [];
     const api = await this.git?.getApi();
@@ -796,17 +807,25 @@ export class ReviewRange implements vscode.Disposable {
     // otherwise a file edited in an earlier run shows those older lines here too, which is
     // not "what changed in the last run" by any reading.
     const snapshot = scope === 'recent' ? this.snapshot : undefined;
+    // A deleted file has nothing to show on the right. Handing the multi-file diff a path
+    // that is not there gives it a side it cannot open, and the entry does not render.
+    const gone = new Set(
+      (await Promise.all(uris.map(async (u) => ((await this.exists(u)) ? undefined : u.toString())))).filter(
+        (v): v is string => v !== undefined,
+      ),
+    );
     return uris.map((uri) => {
       let original: vscode.Uri | undefined;
       const rel = root ? path.relative(root, uri.fsPath) : undefined;
       const stored = snapshot && rel !== undefined ? snapshot.storedPath(rel) : undefined;
-      if (stored !== undefined) return [uri, vscode.Uri.file(stored), uri];
+      const modified = gone.has(uri.toString()) ? undefined : uri;
+      if (stored !== undefined) return [uri, vscode.Uri.file(stored), modified];
       try {
         original = api?.toGitUri(uri, summary.base);
       } catch {
         original = undefined;
       }
-      return [uri, original, uri];
+      return [uri, original, modified];
     });
   }
 

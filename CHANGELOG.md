@@ -23,6 +23,10 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: a file Claude deleted did not appear in the diff. It was in the change list all
+  along — the multi-file diff was handed the missing path as the *right* side of the
+  comparison, which it cannot open, so the entry did not render. A deleted file now has no
+  right-hand side, which is how a deletion is shown.
 - Changed: a done card is **marked, not faded**. It carries Claude's account of what it
   changed, so dimming it to 55% opacity made the most useful text on the card the hardest to
   read. A green left spine and a green status say settled instead.

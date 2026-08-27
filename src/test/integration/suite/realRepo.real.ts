@@ -83,6 +83,49 @@ describe('against a real repository', () => {
     }
   });
 
+  it('shows a deleted file in the last run, with a diff pair', async () => {
+    // A tracked file that is *clean* is chosen and restored with git afterwards, so nothing
+    // uncommitted can be lost. Deletions have no mtime to date them by, which is the case the
+    // run attribution has to special-case.
+    const cp = await import('node:child_process');
+    const run = (args: string[]): string =>
+      cp.execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+
+    const dirty = new Set(run(['diff', '--name-only', 'HEAD']).split('\n').map((l) => l.trim()));
+    const victim = run(['ls-files'])
+      .split('\n')
+      .map((l) => l.trim())
+      .find((f) => f.endsWith('.ts') && !dirty.has(f) && !f.includes(' '));
+    assert.ok(victim, 'a clean tracked file to remove');
+    console.log(`      removing ${victim}`);
+
+    const before = await fs.readFile(path.join(root, victim));
+    await fs.rm(path.join(root, victim), { force: true });
+    try {
+      const deadline = Date.now() + 30_000;
+      let seen = false;
+      let s: Awaited<ReturnType<typeof api.range.summary>>;
+      while (!seen && Date.now() < deadline) {
+        api.range.invalidateBase();
+        s = await api.range.summary();
+        seen = s?.recent.includes(victim) ?? false;
+        if (!seen) await new Promise((r) => setTimeout(r, 500));
+      }
+      assert.ok(seen, `a deleted file is missing from the last run (via ${s?.recentSource})`);
+
+      const pairs = await api.range.diffResources('recent');
+      const pair = pairs.find(([uri]) => uri.fsPath.endsWith(victim));
+      assert.ok(pair, 'the deleted file has a diff pair');
+      assert.ok(pair[1], 'a left-hand side to compare against');
+      assert.equal(pair[2], undefined, 'and no right-hand side, because the file is gone');
+      console.log(`      left side scheme: ${pair[1]?.scheme}, right side: ${pair[2] ?? 'none'}`);
+    } finally {
+      // Written back rather than checked out: a `git checkout` here competes for the index
+      // lock with the extension's own git calls, and losing that race leaves the file deleted.
+      await fs.writeFile(path.join(root, victim), before);
+    }
+  });
+
   it('produces diff pairs for both scopes without throwing', async () => {
     for (const scope of ['recent', 'all'] as const) {
       const pairs = await api.range.diffResources(scope);
@@ -91,7 +134,7 @@ describe('against a real repository', () => {
       assert.equal(pairs.length, expected, `${scope}: one pair per file`);
       for (const [uri, original, modified] of pairs) {
         assert.equal(uri.scheme, 'file');
-        assert.equal(modified.fsPath, uri.fsPath);
+        if (modified) assert.equal(modified.fsPath, uri.fsPath);
         if (original) assert.ok(original.scheme === 'file' || original.scheme === 'git');
       }
     }
