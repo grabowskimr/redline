@@ -23,6 +23,14 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Changed: **Claude's answers are readable now.** The panel showed them as raw text, so a
+  markdown link appeared as its label *followed by* its whole path, and a repository path has
+  no spaces to wrap at — it pushed the card sideways. Links render as one short reference that
+  opens the file (and jumps to the line), backticked code renders as code, and the speaker is a
+  label rather than two words buried in the sentence. The text is escaped before any of that,
+  so markup inside it stays text.
+- Changed: the report asks for **one sentence** per note, and for code to be pointed at as
+  `[file.ts:12](path)`. The panel is narrow; three paragraphs there are worse than one line.
 - Fixed: **every finished note said "follow-up not sent" when you had written none.** Claude's
   report is stored as a turn in the note's conversation, and the check for an unsent follow-up
   counted every turn added since the send — including the agent's own. So applying a report
