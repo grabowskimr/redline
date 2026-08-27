@@ -36,13 +36,30 @@ async function manualHookEvents(): Promise<string[]> {
   }
 }
 
-async function pluginInstalled(logger: Logger): Promise<boolean> {
+/**
+ * Whether the plugin is installed, and whether Claude Code could actually load it.
+ *
+ * The two are not the same, and the difference is invisible without asking: a manifest that
+ * Claude Code rejects still installs, still reports its version, and simply never runs — which
+ * looks exactly like a working install with nothing to say. `plugin list` prints the reason on
+ * the line after the status, so it is carried through to the message rather than swallowed.
+ */
+async function pluginState(logger: Logger): Promise<{ installed: boolean; error?: string }> {
   try {
     const { stdout } = await execFileP('claude', ['plugin', 'list'], { timeout: 20_000 });
-    return /\bredline@/.test(stdout);
+    const lines = stdout.split('\n');
+    const at = lines.findIndex((l) => /\bredline@/.test(l));
+    if (at < 0) return { installed: false };
+    // The entry's own block, up to the next plugin.
+    const block = lines.slice(at, at + 8);
+    const stop = block.findIndex((l, i) => i > 0 && /^\s*❯/.test(l));
+    const own = stop > 0 ? block.slice(0, stop) : block;
+    if (!own.some((l) => /failed to load/i.test(l))) return { installed: true };
+    const reason = own.find((l) => /^\s*Error:/.test(l));
+    return { installed: true, error: (reason ?? '').replace(/^\s*Error:\s*/, '').trim() || 'Claude Code could not load it' };
   } catch (err) {
     logger.trace(`could not list Claude Code plugins: ${String(err)}`);
-    return false;
+    return { installed: false };
   }
 }
 
@@ -55,7 +72,23 @@ export async function setUpHook(context: vscode.ExtensionContext, logger: Logger
   const commands =
     `claude plugin marketplace add "${context.extensionUri.fsPath}"\n` + 'claude plugin install redline@redline';
 
-  const [installed, manual] = await Promise.all([pluginInstalled(logger), manualHookEvents()]);
+  const [state, manual] = await Promise.all([pluginState(logger), manualHookEvents()]);
+  const installed = state.installed;
+
+  // Installed but rejected: the hooks never run, and nothing else says so.
+  if (state.error) {
+    const choice = await vscode.window.showWarningMessage(
+      `Redline: the Claude Code plugin is installed but failed to load, so none of its hooks are running. ${state.error}`,
+      'Update the plugin',
+    );
+    if (choice === 'Update the plugin') {
+      await vscode.env.clipboard.writeText('claude plugin update redline');
+      void vscode.window.showInformationMessage(
+        'Redline: `claude plugin update redline` copied to your clipboard. Run it, then restart Claude Code.',
+      );
+    }
+    return;
+  }
 
   // Both at once means every hook fires twice. The run-start snapshot is the one that breaks:
   // two copies race, one clearing the directory while the other writes into it.

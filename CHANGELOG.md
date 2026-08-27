@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1 — 2026-08-27
+
+- Fixed: the Claude Code plugin failed to load. Its manifest pointed at
+  `./hooks/hooks.json`, which current Claude Code loads on its own — declaring it as well is
+  a duplicate and the whole plugin is rejected: `claude plugin list` showed
+  `✘ failed to load` while `install`, `update` and `details` all reported success. Requires
+  plugin **0.2.1**.
+- **Redline: Set Up Claude Code Plugin** now checks whether Claude Code could actually load
+  the plugin, not just whether it is installed, and repeats the reason it gave. An installed
+  plugin whose hooks never run looks exactly like a working one with nothing to report.
+
 ## 0.4.0 — 2026-08-27
 
 **"The last run" is now a comparison between two snapshots of the working tree.** It used to
@@ -36,7 +47,7 @@ copied to a scratch file and `GIT_INDEX_FILE` points the staging at that.
   here) nor a `stat` per changed file.
 - The hook no longer keeps a directory of copied files as the run's "before" — a tree object
   does that now. Existing copies are removed at the end of the next run.
-- Requires plugin **0.2.0**: `claude plugin update redline`.
+- Requires plugin **0.2.1**: `claude plugin update redline`.
 
 ## 0.3.2 — 2026-08-27
 
