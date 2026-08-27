@@ -23,6 +23,12 @@
   writing a file, and the end of a run is signalled by a `Stop` hook rather than detected by
   polling an Orca terminal — which also means run-end now works in a plain terminal. The
   backstop poll went from 8s back to 30s.
+- Fixed: **every finished note said "follow-up not sent" when you had written none.** Claude's
+  report is stored as a turn in the note's conversation, and the check for an unsent follow-up
+  counted every turn added since the send — including the agent's own. So applying a report
+  left each note permanently live, offering to send nothing. Only your turns count now.
+- Fixed: a note already marked done still offered **✓ mark done**, so clicking it quietly undid
+  the state instead. It offers **↺ reopen** there, as the collapsed card already did.
 - Fixed: two "Claude finished" notifications could still appear. The guards were about *which
   channel* spoke, and covered the two known reporters; the last line of defence is now about the
   *message* — the same summary twice in quick succession is one run, whatever produced it. Each

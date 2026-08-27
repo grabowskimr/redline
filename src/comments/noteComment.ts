@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { formatLineRange, hasUnsentReply, KIND_META, NoteKind, ReviewNote } from '../model/note';
+import { AGENT_TURN_PREFIX, formatLineRange, hasUnsentReply, isAgentTurn, KIND_META, NoteKind, ReviewNote } from '../model/note';
 import { fenceFor } from '../export/renderBatch';
 import { KIND_GLYPH } from '../model/kindGlyphs';
 
@@ -59,8 +59,10 @@ export function renderCommentBody(note: ReviewNote): vscode.MarkdownString {
   // Claude's turns are stored with a "Claude:" prefix; showing who said what is the whole
   // point once a note has become a conversation.
   for (const a of note.addenda) {
-    const fromAgent = a.startsWith('Claude:');
-    parts.push('', fromAgent ? `↳ **Claude:** ${a.slice('Claude:'.length).trim()}` : `↳ **You:** ${a}`);
+    parts.push(
+      '',
+      isAgentTurn(a) ? `↳ **Claude:** ${a.slice(AGENT_TURN_PREFIX.length).trim()}` : `↳ **You:** ${a}`,
+    );
   }
   if (note.suggestion !== undefined) {
     const fence = fenceFor(note.suggestion);

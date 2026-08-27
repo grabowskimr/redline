@@ -271,3 +271,36 @@ describe('note visibility', () => {
     assert.deepEqual(store.notes.filter(isOnDeck).map((n) => n.body), ['a'], 'sent note moves out of the deck');
   });
 });
+
+describe('what counts as an unsent follow-up', () => {
+  it('does not treat Claude answering as a follow-up you owe it', () => {
+    // The reported bug: applying a report added Claude's turn, which made every finished note
+    // read "follow-up not sent" and stay live with nothing to send.
+    const store = makeStore();
+    const a = store.add(input());
+    store.markSent([a.id]);
+    store.update(a.id, {
+      addenda: ['Claude: done — added the comment above QuestionSwitch'],
+      done: true,
+    });
+    assert.equal(hasUnsentReply(store.getById(a.id)!), false, 'the conversation is settled');
+  });
+
+  it('still notices your own follow-up written after that', () => {
+    const store = makeStore();
+    const a = store.add(input());
+    store.markSent([a.id]);
+    store.update(a.id, { addenda: ['Claude: done — did the thing'] });
+    assert.equal(hasUnsentReply(store.getById(a.id)!), false);
+    store.update(a.id, { addenda: [...store.getById(a.id)!.addenda, 'not quite — put it above'] });
+    assert.equal(hasUnsentReply(store.getById(a.id)!), true, 'yours is unsent');
+  });
+
+  it('counts a follow-up written before Claude replied', () => {
+    const store = makeStore();
+    const a = store.add(input());
+    store.markSent([a.id]);
+    store.update(a.id, { addenda: ['one more thing', 'Claude: done — did it'] });
+    assert.equal(hasUnsentReply(store.getById(a.id)!), true, 'yours was never sent');
+  });
+});

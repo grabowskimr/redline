@@ -180,16 +180,25 @@ export function isOpen(n: ReviewNote): boolean {
   return !n.done && !n.sent;
 }
 
+/** Prefix on a turn written by the agent rather than by you. */
+export const AGENT_TURN_PREFIX = 'Claude:';
+
+/** Whether a conversation turn came from the agent. */
+export function isAgentTurn(turn: string): boolean {
+  return turn.startsWith(AGENT_TURN_PREFIX);
+}
+
 /**
- * A reply written after the last send: the agent has not seen it yet.
+ * A follow-up *you* wrote after the last send: the agent has not seen it yet.
  *
- * This is what reopens a finished note. Adding a follow-up to something Claude already
- * answered means the conversation is live again, and the note should stop looking settled
- * until it has been sent.
+ * This is what reopens a finished note. Only your own turns count — the agent's report is
+ * stored as a turn too, so counting every turn made applying a report look like an unsent
+ * follow-up, leaving a finished note permanently live and offering to send nothing.
  */
 export function hasUnsentReply(n: ReviewNote): boolean {
   if (!n.sent) return false;
-  return n.addenda.length > (n.sent.addendaAtSend ?? n.addenda.length);
+  const seen = n.sent.addendaAtSend ?? n.addenda.length;
+  return n.addenda.slice(seen).some((turn) => !isAgentTurn(turn));
 }
 
 /**

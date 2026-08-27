@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { isOpen, ReviewNote } from '../model/note';
+import { AGENT_TURN_PREFIX, isOpen, ReviewNote } from '../model/note';
 import { copyToClipboard, currentHashes, openPreview, renderNotes } from '../export/submit';
 import { parseReport } from '../export/report';
 import { pickTarget, readTarget, resolveTarget, sendBatchToClaude, SessionTarget, targetByKey } from '../claude/claudeSession';
@@ -266,7 +266,7 @@ export function batchCommands(deps: Deps) {
       // change, or declined one. A bare "done" beside changed code leaves nothing to read,
       // and the note is now a thread that stays on the line.
       if (it.text) {
-        const addendum = `Claude: ${it.text}`;
+        const addendum = `${AGENT_TURN_PREFIX} ${it.text}`;
         if (!n.addenda.includes(addendum)) patch.addenda = [...n.addenda, addendum];
       }
       if (it.outcome === 'done') patch.done = true;

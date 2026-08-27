@@ -421,6 +421,16 @@ describe('rendering a card', () => {
     assert.doesNotMatch(html, /data-unshot/);
   });
 
+  it('offers reopen, not mark-done, on a note already done', () => {
+    // Offering ✓ there means the click undoes it — which reads as the button doing nothing.
+    const html = render({
+      id: 'n1', seq: 1, body: 'x', done: true,
+      sent: { changed: false, outcome: 'done' }, pendingReply: true,
+    });
+    assert.match(html, /data-act="reopen"/);
+    assert.doesNotMatch(html, /data-act="done"/);
+  });
+
   it('shows the waiting state, and a send action for an unsent follow-up', () => {
     assert.match(render({ id: 'n1', seq: 1, body: 'x', awaiting: true }), /waiting for Claude/);
     const pending = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: false, outcome: 'done' }, pendingReply: true });

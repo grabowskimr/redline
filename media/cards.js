@@ -283,7 +283,9 @@
             '📎',
             'Attach a screenshot: click to pick a file, paste with ⌘V, or hold ⇧ while dragging an image onto this card',
           ) +
-          btn('done', '✓', 'Mark done')) +
+          // Reflects the state it is in: offering "mark done" on a note that is already done
+          // means the click quietly undoes it, which reads as the button not working.
+          (n.done ? btn('reopen', '↺', 'Reopen this note') : btn('done', '✓', 'Mark done'))) +
       (!n.sent || n.pendingReply
         ? btn(
             'send',
