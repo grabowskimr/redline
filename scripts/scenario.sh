@@ -29,6 +29,7 @@ git config commit.gpgsign false
 printf 'export const kept = 1\n' > src/kept.ts
 printf 'export const gone = 1\n' > src/gone.ts
 printf 'export const component = 1\n' > src/component.ts
+printf 'export const restored = 1\n' > src/restored.ts
 printf 'build/\n' > .gitignore
 # Committed rather than set at runtime: `getConfiguration().update()` writes this file into the
 # workspace, which changes the very working tree the assertions are about.
@@ -45,6 +46,10 @@ snapshot() {
 
 # An edit from an *earlier* run, which must not be reported as part of the last one.
 printf 'export const earlier = 1\n' >> src/component.ts
+# An uncommitted edit of your own, which the run is about to undo — "remove the comment I
+# added". Afterwards the file is identical to the base commit, so it differs from nothing
+# there while being exactly what the run did.
+printf '// a stray comment\n' >> src/restored.ts
 sleep 1
 
 AT=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
@@ -57,6 +62,7 @@ printf 'export const helper = () => 1\n' > src/utils.ts
 printf 'it("helps", () => {})\n' > src/utils.test.ts
 printf 'import { helper } from "./utils"\nexport const component = helper()\n' > src/component.ts
 rm src/gone.ts
+printf 'export const restored = 1\n' > src/restored.ts
 git mv src/kept.ts src/moved.ts
 mkdir -p build && printf 'noise\n' > build/out.js
 

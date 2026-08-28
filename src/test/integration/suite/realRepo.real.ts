@@ -45,9 +45,17 @@ describe('against a real repository', () => {
     );
     assert.equal(s.unavailable, undefined, 'the file list was readable');
     assert.ok(s.fileCount < 5000, `implausible change count: ${s.fileCount}`);
+    // Deliberately *not* asserting that the last run is a subset of everything. A run that
+    // puts a file back to its committed state changed it, and it differs from nothing at the
+    // base — so it belongs in one scope and not the other. Requiring the subset relationship
+    // is what hid those files.
     const all = new Set(s.files);
-    for (const f of s.recent) assert.ok(all.has(f), `${f} is in recent but not in files`);
-    assert.equal(s.olderCount, s.fileCount - s.recentCount);
+    const inRun = new Set(s.recent);
+    assert.equal(s.olderCount, s.files.filter((f) => !inRun.has(f)).length, 'older is what the run missed');
+    assert.ok(s.olderCount <= s.fileCount);
+    for (const f of s.recent) {
+      if (!all.has(f)) console.log(`      ${f} was restored to its committed state by the run`);
+    }
   });
 
   it('answers again from cache, quickly', async () => {

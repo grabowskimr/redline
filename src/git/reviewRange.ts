@@ -736,10 +736,17 @@ export class ReviewRange implements vscode.Disposable {
     }
     files.sort();
 
-    const visible = new Set(files);
-    // A file the run changed and then changed back is not part of the review, so the last run
-    // stays a subset of everything shown.
-    const recent = [...run.keys()].filter((f) => visible.has(f)).sort();
+    // Everything the run touched, including a file it put *back* to its committed state —
+    // which is what "remove the comment I added" looks like from here. That file differs from
+    // nothing at the base, so it is legitimately absent from All while being the whole point
+    // of Last. The two scopes answer different questions and neither contains the other:
+    //
+    //   All  — what differs from the base commit
+    //   Last — what this run changed
+    //
+    // Filtering Last down to All was hiding exactly the changes a review had just produced.
+    const recent = [...run.keys()].sort();
+    const inRun = new Set(recent);
 
     this.statuses = all;
     this.runStatuses = run;
@@ -755,7 +762,9 @@ export class ReviewRange implements vscode.Disposable {
       recent,
       recentCount: recent.length,
       recentLabel: `in the last run (since ${shortTime(before.at)})`,
-      olderCount: files.length - recent.length,
+      // Files changed since the base that this run did not touch — not a subtraction of the
+      // two counts, which no longer overlap completely.
+      olderCount: files.filter((f) => !inRun.has(f)).length,
       recentSource: 'hook',
     };
     const total = Date.now() - t0;

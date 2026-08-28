@@ -44,10 +44,23 @@ describe('the run Claude just finished', function () {
     assert.equal(s.recentSource, 'hook', 'the tree snapshots were used');
     assert.deepEqual(
       [...s.recent].sort(),
-      ['src/component.ts', 'src/gone.ts', 'src/moved.ts', 'src/utils.test.ts', 'src/utils.ts'],
-      'both new files, the deletion, the rename and the updated import',
+      [
+        'src/component.ts',
+        'src/gone.ts',
+        'src/moved.ts',
+        'src/restored.ts',
+        'src/utils.test.ts',
+        'src/utils.ts',
+      ],
+      'both new files, the deletion, the rename, the updated import and the restored file',
     );
     assert.ok(!s.recent.includes('build/out.js'), 'ignored output stays out');
+
+    // The one that was missing for real: the run undid an uncommitted edit, so the file is now
+    // identical to the base commit. It differs from nothing there — and it is the whole point
+    // of the review. Last and All answer different questions; neither contains the other.
+    assert.ok(!s.files.includes('src/restored.ts'), 'nothing to show against the base commit');
+    assert.equal(s.olderCount, s.files.filter((f) => !s.recent.includes(f)).length, 'older is what the run missed');
   });
 
   it('compares the last run against the file as the run found it, not against the base', async () => {
@@ -72,6 +85,13 @@ describe('the run Claude just finished', function () {
     assert.equal(was.getText(), 'export const kept = 1\n', 'compared against the path it came from');
 
     // The one that is easy to get wrong: this file was already modified when the run began.
+    // The restored file has a real left side too: the comment that was there when the run
+    // began, so the diff reads as the removal it was asked for.
+    const restored = byPath.get('src/restored.ts');
+    assert.ok(restored, 'the restored file is in the diff');
+    const had = await vscode.workspace.openTextDocument(restored[1]);
+    assert.ok(had.getText().includes('a stray comment'), 'the comment the run was asked to remove');
+
     const edited = byPath.get('src/component.ts');
     assert.ok(edited, 'the edited file is in the diff');
     const before = await vscode.workspace.openTextDocument(edited[1]);
@@ -109,7 +129,14 @@ describe('the run Claude just finished', function () {
       assert.equal(s?.recentSource, 'hook', 'the snapshot landed and the answer became exact');
       assert.deepEqual(
         [...(s?.recent ?? [])].sort(),
-        ['src/component.ts', 'src/gone.ts', 'src/moved.ts', 'src/utils.test.ts', 'src/utils.ts'],
+        [
+          'src/component.ts',
+          'src/gone.ts',
+          'src/moved.ts',
+          'src/restored.ts',
+          'src/utils.test.ts',
+          'src/utils.ts',
+        ],
         'the same answer as with a stop marker',
       );
     } finally {

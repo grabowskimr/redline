@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.1 — 2026-08-28
+
+- Fixed: a file the run put *back* to its committed state was missing from **Last**. Asking
+  Claude to remove a comment you had added but not committed leaves the file identical to the
+  base commit — so it differs from nothing there, and a filter that required every file in
+  **Last** to also appear in **All** dropped it. Three changes were reported as two.
+
+  The filter was protecting an invariant that is not real. The two scopes answer different
+  questions and neither contains the other:
+
+  - **All** — what differs from the base commit.
+  - **Last** — what this run changed.
+
+  A file restored to its committed state belongs in the second and not the first, and it is
+  precisely what a review that asked for a removal produces. The same now holds for a file
+  that was untracked before the run and deleted by it. "N more changed files" counts what the
+  run did not touch, rather than subtracting two counts that no longer overlap.
+
 ## 1.0.0 — 2026-08-27
 
 A pass over the whole extension for a public release. Nine findings, in the order they would
