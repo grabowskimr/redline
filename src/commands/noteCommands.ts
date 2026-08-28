@@ -271,6 +271,25 @@ export function noteCommands(deps: Deps) {
     );
   }
 
+  /**
+   * Open the follow-up box on the note this widget is showing.
+   *
+   * The box used to sit under every note whether or not anything was being written in it,
+   * which put a second input below a card that already carries the note, the answer and a row
+   * of actions. It is opened deliberately now, from the widget's own toolbar.
+   */
+  async function followUpHere(arg: unknown): Promise<void> {
+    const id = resolveNoteIdOrPick(deps, arg);
+    if (!id) {
+      void vscode.window.showInformationMessage('Redline: no note here to follow up on.');
+      return;
+    }
+    if (!(await host.openReply(id))) {
+      // No widget on screen for it — the prompt is the next best thing.
+      await addFollowUp(id);
+    }
+  }
+
   async function addFollowUp(arg: unknown): Promise<void> {
     const id = resolveNoteIdOrPick(deps, arg);
     const note = id ? store.getById(id) : undefined;
@@ -505,6 +524,7 @@ export function noteCommands(deps: Deps) {
     cancelEdit,
     cancelReply,
     addFollowUp,
+    followUpHere,
     replyToNote,
     deleteNote,
     toggleDone,

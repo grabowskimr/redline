@@ -104,6 +104,38 @@ export class CommentHost implements vscode.Disposable {
    * Close the follow-up textarea (discarding its draft) without collapsing the widgets.
    * Toggling `canReply` re-renders the reply area back to its collapsed state.
    */
+  /**
+   * Notes whose follow-up box is open.
+   *
+   * Held here rather than read off the thread: every refresh rebuilds the thread's state from
+   * the note, so without somewhere to remember it the box would close on the next store change
+   * — which happens while you are typing in it.
+   */
+  private readonly replyOpen = new Set<string>();
+
+  /** Open the follow-up box on a note and put the cursor in it. */
+  async openReply(noteId: string): Promise<boolean> {
+    const thread = this.threadsByNoteId.get(noteId);
+    if (!thread) return false;
+    this.replyOpen.add(noteId);
+    this.refresh(noteId);
+    thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+    // The focus command works on the thread under the cursor, so the cursor goes there first.
+    try {
+      const editor = await vscode.window.showTextDocument(thread.uri, { preview: false, preserveFocus: false });
+      const at = thread.range?.start ?? new vscode.Position(0, 0);
+      editor.selection = new vscode.Selection(at, at);
+      await vscode.commands.executeCommand('workbench.action.focusCommentOnCurrentLine');
+    } catch {
+      // The box is open either way; only the focus was best-effort.
+    }
+    return true;
+  }
+
+  isReplyOpen(noteId: string): boolean {
+    return this.replyOpen.has(noteId);
+  }
+
   cancelReply(uri: vscode.Uri, only?: vscode.CommentThread): boolean {
     // Just the thread the Cancel came from, when it is known. Falling back to every thread in
     // the file would close a reply being written on a different note.
@@ -111,7 +143,10 @@ export class CommentHost implements vscode.Disposable {
       ? this.threadsForUri(uri).filter(({ thread }) => thread === only)
       : this.threadsForUri(uri);
     if (threads.length === 0) return false;
-    for (const { thread } of threads) thread.canReply = false;
+    for (const { noteId, thread } of threads) {
+      thread.canReply = false;
+      this.replyOpen.delete(noteId);
+    }
     setTimeout(() => {
       for (const { noteId } of threads) this.refresh(noteId);
     }, 0);
@@ -148,7 +183,7 @@ export class CommentHost implements vscode.Disposable {
   adopt(thread: vscode.CommentThread, note: ReviewNote): void {
     const previous = this.threadsByNoteId.get(note.id);
     if (previous && previous !== thread) this.disposeThread(note.id);
-    applyNoteToThread(thread, note);
+    applyNoteToThread(thread, note, this.replyOpen.has(note.id));
     thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
     this.register(note.id, thread);
   }
@@ -166,7 +201,7 @@ export class CommentHost implements vscode.Disposable {
       // Note moved to another file (re-anchor): the old thread is stale.
       this.disposeThread(note.id);
     }
-    const thread = createThread(this.controller, target, note);
+    const thread = createThread(this.controller, target, note, this.replyOpen.has(note.id));
     this.register(note.id, thread);
     return thread;
   }
@@ -185,12 +220,13 @@ export class CommentHost implements vscode.Disposable {
       if (!thread.range || !thread.range.isEqual(r)) thread.range = r;
       return;
     }
-    applyNoteToThread(thread, note);
+    applyNoteToThread(thread, note, this.replyOpen.has(noteId));
   }
 
   disposeThread(noteId: string): void {
     const thread = this.threadsByNoteId.get(noteId);
     if (!thread) return;
+    this.replyOpen.delete(noteId);
     this.threadsByNoteId.delete(noteId);
     try {
       thread.dispose();

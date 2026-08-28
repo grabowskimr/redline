@@ -54,6 +54,8 @@ export interface RedlineApi {
    */
   hookRuns(): number;
   reportHookRun(): Promise<void>;
+  /** Whether the follow-up box is open on a note — the widget's own state is not observable. */
+  replyOpenOn(noteId: string): boolean;
 }
 
 /** Wall time activation took, reported through the API so it can be asserted, not assumed. */
@@ -238,6 +240,7 @@ async function activateInner(
     'redline.markBaseline': batch.markBaseline,
     'redline.clearBaseline': batch.clearBaseline,
     'redline.refresh': batch.refresh,
+    'redline.followUpHere': notes.followUpHere,
     'redline.reviewPreviousRun': batch.reviewPreviousRun,
     'redline.setUpHook': () => setUpHook(context, logger),
     'redline.showLog': batch.showLog,
@@ -363,6 +366,7 @@ async function activateInner(
     activationMs: () => activationCost,
     range,
     hookRuns: () => batch.hookRunsReported(),
+    replyOpenOn: (noteId) => host.isReplyOpen(noteId),
     reportHookRun: () => batch.onHookRunFinished(),
   };
 }

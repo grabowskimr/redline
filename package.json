@@ -2,7 +2,7 @@
   "name": "redline",
   "displayName": "Redline",
   "description": "Review Claude Code's work — inline notes on the lines that need changes, handed back as one prompt.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "publisher": "marcin",
   "license": "MIT",
   "repository": {
@@ -79,6 +79,12 @@
         "command": "redline.cancelReply",
         "title": "Cancel",
         "category": "Redline"
+      },
+      {
+        "command": "redline.followUpHere",
+        "title": "Follow-up",
+        "category": "Redline",
+        "icon": "$(comment)"
       },
       {
         "command": "redline.addFollowUp",
@@ -356,6 +362,11 @@
       ],
       "comments/commentThread/title": [
         {
+          "command": "redline.followUpHere",
+          "group": "navigation@0",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty"
+        },
+        {
           "command": "redline.kindChange",
           "group": "navigation@1",
           "when": "commentController == redline.notes && !commentThreadIsEmpty"
@@ -617,6 +628,10 @@
         },
         {
           "command": "redline.kindChange",
+          "when": "false"
+        },
+        {
+          "command": "redline.followUpHere",
           "when": "false"
         }
       ]

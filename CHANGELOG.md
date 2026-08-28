@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0 — 2026-08-28
+
+- The follow-up box no longer sits under every note in the editor widget. It was there whether
+  or not anything was being written in it, below a card that already carries the note, Claude's
+  answer and a row of actions — so the widget stopped being readable at a glance. **Follow-up**
+  is now a button on the widget's own toolbar: it opens the box, expands the thread and puts
+  the cursor in it.
+- The box stays open across store changes, which happen constantly while you are typing in it,
+  and closes on cancel or once the turn is recorded.
+
 ## 1.2.0 — 2026-08-28
 
 Ten improvements, four of them to how much work the extension does when nothing is happening.

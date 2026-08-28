@@ -15,7 +15,10 @@ interface Api {
     hasArchive: boolean;
     clear(): void;
     clearSent(): number;
+    update(id: string, patch: Record<string, unknown>): void;
+    delete(ids: string[]): void;
   };
+  replyOpenOn: (noteId: string) => boolean;
   createNoteAt: (u: vscode.Uri, r: vscode.Range, b: string) => Promise<{ id: string; seq: number } | undefined>;
   panelReady: (timeoutMs?: number) => Promise<boolean>;
   attachFile: (noteId: string, name: string, bytes: Uint8Array) => Promise<string | undefined>;
@@ -87,6 +90,39 @@ describe('Redline (integration)', function () {
     // away must still leave a visible way out.
     const cancel = entries.find((e) => e.command === 'redline.cancelReply');
     assert.ok(cancel, 'the reply box offers a cancel action');
+  });
+
+  it('keeps the follow-up box closed until the toolbar asks for it', async () => {
+    // The box used to sit under every note whether or not anything was being written in it,
+    // below a card that already carries the note, the answer and a row of actions.
+    const note = await api.createNoteAt(sampleUri, new vscode.Range(0, 0, 0, 4), 'toolbar follow-up');
+    assert.ok(note, 'a note to attach a widget to');
+    try {
+      assert.equal(api.replyOpenOn(note.id), false, 'no reply box until asked');
+
+      await vscode.commands.executeCommand('redline.followUpHere', note.id);
+      assert.equal(api.replyOpenOn(note.id), true, 'the toolbar opens it');
+
+      // And it survives the store changing underneath, which happens while you type in it.
+      api.store.update(note.id, { body: 'toolbar follow-up, edited' });
+      assert.equal(api.replyOpenOn(note.id), true, 'still open after a refresh');
+
+      await vscode.commands.executeCommand('redline.cancelReply');
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(api.replyOpenOn(note.id), false, 'cancel closes it again');
+    } finally {
+      api.store.delete([note.id]);
+    }
+  });
+
+  it('offers the follow-up button on the widget toolbar, not only in the reply box', () => {
+    const pkg = vscode.extensions.getExtension(EXT_ID)?.packageJSON as {
+      contributes: { menus: Record<string, Array<{ command: string; when: string; group?: string }>> };
+    };
+    const title = pkg.contributes.menus['comments/commentThread/title'] ?? [];
+    const entry = title.find((e) => e.command === 'redline.followUpHere');
+    assert.ok(entry, 'the widget toolbar offers it');
+    assert.match(entry.when, /!commentThreadIsEmpty/, 'a thread with no note has nothing to follow up');
   });
 
   it('runs every palette-safe command with no arguments without throwing', async () => {
