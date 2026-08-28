@@ -141,20 +141,6 @@
     return lines.map((l) => l.slice(min)).join('\n');
   }
 
-  function codeBox(cls, label, code, act) {
-    return (
-      '<pre class="' +
-      cls +
-      '" data-act="' +
-      act +
-      '"><span class="label">' +
-      label +
-      '</span><span class="code">' +
-      esc(dedent(code)) +
-      '</span></pre>'
-    );
-  }
-
   const AGENT_PREFIX = 'Claude:';
 
   /** A turn written by the agent rather than by you. Mirrors `isAgentTurn` in the model. */

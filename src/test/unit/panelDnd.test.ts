@@ -678,3 +678,35 @@ describe('filtering by state', () => {
   });
 });
 
+
+describe('the panel stylesheet', () => {
+  const media = path.resolve(__dirname, '../../../media');
+  const js = fs.readFileSync(path.join(media, 'cards.js'), 'utf8');
+  const css = fs.readFileSync(path.join(media, 'cards.css'), 'utf8');
+
+  it('defines every class the script puts on the page', () => {
+    // The overflow menu shipped as a list of words under the last card: its rules were lost
+    // with a block that was replaced wholesale, and nothing failed — the markup was still
+    // correct, it just had no styling, so an absolutely-positioned popup laid out in the flow.
+    // Literal class lists only. The markup is built by concatenation, so half of what follows
+    // a `class="` is an expression — and the names inside one cannot be read statically.
+    const used = new Set<string>();
+    const collect = (raw: string): void => {
+      if (/['"+$]/.test(raw)) return;
+      for (const name of raw.split(/\s+/)) {
+        // Codicons come from the icon font's own stylesheet, which ships beside this one.
+        if (/^[a-z][a-z0-9-]*$/i.test(name) && !name.startsWith('codicon')) used.add(name);
+      }
+    };
+    for (const m of js.matchAll(/class="([^"]*)"/g)) collect(m[1] ?? '');
+    for (const m of js.matchAll(/className = '([^']+)'/g)) collect(m[1] ?? '');
+    const undefined_ = [...used].filter((name) => !new RegExp(`\\.${name}(?![\\w-])`).test(css));
+    assert.deepEqual(undefined_, [], `classes with no rules: ${undefined_.join(', ')}`);
+  });
+
+  it('positions the popup out of the flow, wherever its other rules go', () => {
+    const menu = /\.menu\s*\{([^}]*)\}/.exec(css);
+    assert.ok(menu, 'the menu is styled');
+    assert.match(menu[1] ?? '', /position:\s*(absolute|fixed)/, 'or it renders as text under the cards');
+  });
+});

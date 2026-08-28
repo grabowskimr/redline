@@ -611,3 +611,47 @@ body {
 .card.done.open .summary .what {
   color: #c9c6c1;
 }
+
+/* ── the overflow menu ───────────────────────────────────────────────── */
+/*
+ * Absolutely positioned, and it has to be: the popup is appended to `body`, so without this it
+ * lays out in the normal flow and reads as a list of words under the last card. Its rules were
+ * lost with the old card block, and nothing else in the panel makes an element float.
+ */
+.menu {
+  position: absolute;
+  z-index: 10;
+  min-width: 180px;
+  padding: 5px 0;
+  background: #212226;
+  border: 1px solid #3a3c41;
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  color: #d6d3ce;
+  font-size: 13px;
+}
+.menu div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menu div:hover {
+  background: #2b2c30;
+  color: #e6e4e1;
+}
+.menu .mi {
+  width: 16px;
+  text-align: center;
+  color: #8d8a86;
+  display: inline-flex;
+  justify-content: center;
+}
+.menu div:hover .mi {
+  color: inherit;
+}
+.menu .codicon {
+  font-size: 14px;
+}

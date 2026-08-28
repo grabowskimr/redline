@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.2 — 2026-08-28
+
+- Fixed: **the ⋯ menu rendered as a list of words under the last card.** Its rules went with the
+  block the redesign replaced, and nothing failed — the markup was still right, it just had no
+  styling, so a popup that is appended to `body` and positioned absolutely laid out in the
+  normal flow instead. The kind picker used the same rules and was broken with it.
+- A test now checks that every class the panel script writes has a rule somewhere in the
+  stylesheet, and that the popup is positioned out of the flow. Nothing else would have caught
+  this: the failure is invisible to a type checker and to every test that reads markup.
+- That check immediately found dead code behind it — the old code-box renderer the redesign
+  replaced, and the "current code" it was fed, which was being read off disk for every changed
+  note on every render and shown nowhere.
+
 ## 1.5.1 — 2026-08-28
 
 - Screenshots are a row each now — thumbnail, name, and what they are attached to — rather than

@@ -17,7 +17,6 @@ import { readStopMarker } from '../claude/runTrees';
 import { parseDroppedPaths } from '../dnd/dropPayload';
 import { ReviewStore } from '../store/reviewStore';
 import { NoteIndex } from './noteIndex';
-import { resolveAnchor, snippetAt } from '../anchor/anchorService';
 import { uriForNote } from '../comments/uriMapping';
 import { SessionWatcher } from '../claude/sessionWatcher';
 import { HookSignals } from '../claude/hookSignals';
@@ -63,8 +62,6 @@ interface CardData {
   pendingReply?: boolean;
   /** Sent, and Claude has not reported on it yet. */
   awaiting?: boolean;
-  /** Current code at the note's location when it differs from `snippet`. */
-  after?: string;
 }
 
 
@@ -363,28 +360,8 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       c.sent = { changed };
       if (n.sent.outcome) c.sent.outcome = n.sent.outcome;
       if (n.sent.reply) c.sent.reply = n.sent.reply;
-      if (changed) {
-        const after = this.currentCode(n);
-        if (after !== undefined && after !== n.anchor.snippet) c.after = after;
-      }
     }
     return c;
-  }
-
-  /** Current text at the note's anchor, from an open document only (never blocks on IO). */
-  private currentCode(n: ReviewNote): string | undefined {
-    const uri = uriForNote(n.path, n.workspaceFolder);
-    if (!uri) return undefined;
-    const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-    if (!doc) return undefined;
-    try {
-      const text = doc.getText();
-      const resolved = resolveAnchor(text, n.anchor);
-      const code = snippetAt(text, resolved ? resolved.range : n.range);
-      return code.trim() ? code : undefined;
-    } catch {
-      return undefined;
-    }
   }
 
   // ── inbound ──────────────────────────────────────────────────────────
