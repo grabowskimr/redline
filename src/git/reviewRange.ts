@@ -10,7 +10,7 @@ import { parseDiffByFile, parseHunks } from './hunks';
 import { RUN_GRACE_MS, selectRunFiles } from './runFiles';
 import { touchedPathsSince } from '../claude/touched';
 import { differsFromSnapshot, readSnapshot, RunSnapshot } from '../claude/snapshot';
-import { readRunTrees, RunTree, RunTrees } from '../claude/runTrees';
+import { PastRun, readRunTrees, RunTree, RunTrees } from '../claude/runTrees';
 import { binaryPaths, GitRunner, nulFields, snapshotWorkingTree, treeChanges, TreeChange } from './snapshotTree';
 import { treeSide } from './treeSide';
 
@@ -48,9 +48,17 @@ const MAX_NEW_FILE_SCAN_BYTES = 2 * 1024 * 1024;
  */
 export const EMPTY_SIDE_SCHEME = 'redline-empty';
 
-/** An empty stand-in that keeps the real path visible in the editor's title. */
-function emptySide(uri: vscode.Uri): vscode.Uri {
-  return uri.with({ scheme: EMPTY_SIDE_SCHEME, query: '', fragment: '' });
+/**
+ * An empty stand-in that keeps the real path visible in the editor's title.
+ *
+ * `note` is appended to the file name, which is what the multi-file diff shows above each
+ * entry — so "MissingBandAlert.tsx (new file)" beside the real name says what happened without
+ * having to open it. Only ever applied to the empty side, so the mangled extension costs
+ * nothing: there is no content to highlight.
+ */
+function emptySide(uri: vscode.Uri, note?: string): vscode.Uri {
+  const path = note ? `${uri.path} (${note})` : uri.path;
+  return uri.with({ scheme: EMPTY_SIDE_SCHEME, path, query: '', fragment: '' });
 }
 
 /** Serves nothing, for the side of a comparison that does not exist. */
@@ -417,7 +425,10 @@ export class ReviewRange implements vscode.Disposable {
       const session = await latestSessionAmong([...folders, root, ...this.cwdHints]);
       if (session) {
         const since = reviewWindowStart(session);
-        const sha = await this.commitAt(since);
+        // Independent: one asks git which commit the window starts at, the other reads the
+        // transcript for the last request. Run one after the other and the whole base
+        // resolution waits for a `git` spawn *and* a file read that never needed each other.
+        const [sha, request] = await Promise.all([this.commitAt(since), lastRequestStart(session)]);
         if (sha) {
           const resolved: ResolvedBase = {
             base: sha,
@@ -428,8 +439,7 @@ export class ReviewRange implements vscode.Disposable {
           // question being asked ("what did it do about what I just sent?"). Only when no
           // request can be found does the idle-gap heuristic stand in.
           const runSince =
-            (await lastRequestStart(session)) ??
-            (await lastRunStart(session, Math.max(1, this.gapMinutes()) * 60 * 1000));
+            request ?? (await lastRunStart(session, Math.max(1, this.gapMinutes()) * 60 * 1000));
           if (Date.parse(runSince) > Date.parse(since)) {
             const runBase = await this.commitAt(runSince);
             if (runBase) resolved.run = { base: runBase, since: runSince };
@@ -448,9 +458,10 @@ export class ReviewRange implements vscode.Disposable {
     // best answer to "what changed here" — and it includes local commits, which a plain
     // HEAD comparison would hide.
     try {
-      const floor = await this.publishedFloor();
+      // Both are cached and neither depends on the other; asking in sequence cost a spawn's
+      // worth of latency for nothing.
+      const [floor, head] = await Promise.all([this.publishedFloor(), this.head()]);
       if (floor) {
-        const head = await this.head();
         const label = floor === head ? 'since the last commit' : 'all local changes';
         return { base: floor, label, origin: floor === head ? 'head' : 'local' };
       }
@@ -727,14 +738,16 @@ export class ReviewRange implements vscode.Disposable {
     const pinned = this.store.baseline;
     const preexisting = new Set(pinned?.untracked ?? []);
     const pinnedAt = pinned ? Date.parse(pinned.at) : Number.NaN;
-    const files: string[] = [];
-    for (const [file, status] of all) {
-      if (status.kind === 'added' && preexisting.has(file) && Number.isFinite(pinnedAt)) {
-        if (!(await this.modifiedAfter(file, pinnedAt))) continue;
-      }
-      files.push(file);
-    }
-    files.sort();
+    // Only the untracked files that were already there when a baseline was pinned need a
+    // timestamp, and they were being stat-ed one at a time in a loop — serial latency for a
+    // question every file can answer independently.
+    const needsDating = [...all].filter(
+      ([file, status]) => status.kind === 'added' && preexisting.has(file) && Number.isFinite(pinnedAt),
+    );
+    const dated = new Map(
+      await Promise.all(needsDating.map(async ([file]) => [file, await this.modifiedAfter(file, pinnedAt)] as const)),
+    );
+    const files = [...all.keys()].filter((file) => dated.get(file) !== false).sort();
 
     // Everything the run touched, including a file it put *back* to its committed state —
     // which is what "remove the comment I added" looks like from here. That file differs from
@@ -1175,6 +1188,72 @@ export class ReviewRange implements vscode.Disposable {
     return paths;
   }
 
+  /**
+   * What happened to the files in a scope: how many arrived, went, moved or were edited.
+   *
+   * For the title of the diff, which otherwise says only how many files there are — and a
+   * deletion reads exactly like an edit until you open it.
+   */
+  async statusBreakdown(scope: 'recent' | 'all'): Promise<string> {
+    const summary = await this.summary();
+    if (!summary) return '';
+    const files = scope === 'recent' ? summary.recent : summary.files;
+    const from = scope === 'recent' && this.runStatuses.size > 0 ? this.runStatuses : this.statuses;
+    const counts = { added: 0, deleted: 0, renamed: 0, modified: 0 };
+    for (const f of files) counts[from.get(f)?.kind ?? 'modified']++;
+    const parts = [
+      counts.added ? `${counts.added} new` : '',
+      counts.deleted ? `${counts.deleted} deleted` : '',
+      counts.renamed ? `${counts.renamed} moved` : '',
+      counts.modified ? `${counts.modified} edited` : '',
+    ].filter(Boolean);
+    // Nothing to add when they are all the same thing and the count already said so.
+    return parts.length > 1 ? parts.join(', ') : '';
+  }
+
+  /**
+   * Runs that have already finished, newest first.
+   *
+   * Sending a follow-up moves the boundary, and until now that put the run before it out of
+   * reach — its trees were still in the object store, but nothing remembered which they were.
+   */
+  async pastRuns(): Promise<PastRun[]> {
+    const root = await this.repoRoot();
+    if (!root) return [];
+    let trees = await readRunTrees(root);
+    if (!trees?.history) {
+      for (const cwd of [...this.cwdHints].slice(-MAX_CWD_HINTS)) {
+        const found = await readRunTrees(cwd);
+        if (found?.history) {
+          trees = found;
+          break;
+        }
+      }
+    }
+    return trees?.history ?? [];
+  }
+
+  /**
+   * The diff of a run that has already finished.
+   *
+   * Both sides come from snapshots rather than from disk: the working tree has moved on since,
+   * and showing today's file beside that run's starting point would attribute everything since
+   * to it.
+   */
+  async diffForRun(run: PastRun): Promise<{ pairs: Array<[vscode.Uri, vscode.Uri, vscode.Uri]>; count: number }> {
+    const root = await this.repoRoot();
+    if (!root) return { pairs: [], count: 0 };
+    const changes = await treeChanges(run.tree, run.after, this.runner);
+    const pairs = [...changes].map(([rel, status]) => {
+      const uri = vscode.Uri.file(path.join(root, rel));
+      const from = status.kind === 'renamed' ? status.from : rel;
+      const left = status.kind === 'added' ? emptySide(uri, 'new file') : treeSide(root, run.tree, from);
+      const right = status.kind === 'deleted' ? emptySide(uri, 'deleted') : treeSide(root, run.after, rel);
+      return [uri, left, right] as [vscode.Uri, vscode.Uri, vscode.Uri];
+    });
+    return { pairs, count: pairs.length };
+  }
+
   /** Left/right pairs for VS Code's multi-file diff editor. */
   async diffResources(scope: 'recent' | 'all' = 'all'): Promise<Array<[vscode.Uri, vscode.Uri, vscode.Uri]>> {
     const summary = await this.summary();
@@ -1198,18 +1277,21 @@ export class ReviewRange implements vscode.Disposable {
         // A path absent from the left tree — a file the run created — resolves to an empty
         // document, which reads as the whole file arriving. Nothing to special-case.
         const from = status?.kind === 'renamed' ? status.from : rel;
-        const modified = status?.kind === 'deleted' ? emptySide(uri) : uri;
+        const modified = status?.kind === 'deleted' ? emptySide(uri, 'deleted') : uri;
+        // Added: nothing to read out of the snapshot, and saying so is more use than an
+        // unlabelled empty pane.
+        if (status?.kind === 'added') {
+          return [uri, emptySide(uri, 'new file'), modified] as [vscode.Uri, vscode.Uri, vscode.Uri];
+        }
         // An image cannot be served as text. Compared against the base instead, where the git
-        // extension has a resource the editor can load properly, and against nothing when it
-        // is new — the same as before snapshots existed.
+        // extension has a resource the editor can load properly. An added one never reaches
+        // here — it was answered above, where there is nothing to compare against at all.
         if (binary.has(from) || binary.has(rel)) {
           let original: vscode.Uri | undefined;
-          if (status?.kind !== 'added') {
-            try {
-              original = api?.toGitUri(vscode.Uri.file(path.join(root, from)), summary.base);
-            } catch {
-              original = undefined;
-            }
+          try {
+            original = api?.toGitUri(vscode.Uri.file(path.join(root, from)), summary.base);
+          } catch {
+            original = undefined;
           }
           return [uri, original ?? emptySide(uri), modified] as [vscode.Uri, vscode.Uri, vscode.Uri];
         }
@@ -1231,14 +1313,14 @@ export class ReviewRange implements vscode.Disposable {
       let original: vscode.Uri | undefined;
       const rel = root ? path.relative(root, uri.fsPath) : undefined;
       const stored = snapshot && rel !== undefined ? snapshot.storedPath(rel) : undefined;
-      const modified = gone.has(uri.toString()) ? emptySide(uri) : uri;
+      const modified = gone.has(uri.toString()) ? emptySide(uri, 'deleted') : uri;
       if (stored !== undefined) return [uri, vscode.Uri.file(stored), modified];
 
       const status = rel !== undefined ? this.statuses.get(rel) : undefined;
       // Added: nothing exists at the base, so the left side is empty and the diff reads as
       // the whole file arriving. Renamed: the left side is the path it came from, which does
       // exist there.
-      if (status?.kind === 'added') return [uri, emptySide(uri), modified];
+      if (status?.kind === 'added') return [uri, emptySide(uri, 'new file'), modified];
       try {
         const left =
           status?.kind === 'renamed' && root

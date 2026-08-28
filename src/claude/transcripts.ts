@@ -63,14 +63,29 @@ function allTimestamps(text: string): number[] {
   return out;
 }
 
+/**
+ * The last window read from a transcript, keyed by the file's identity.
+ *
+ * Several answers come out of the same tail — when the session last spoke, when you last asked
+ * for something, where the idle gaps are — and each was opening and reading the file again.
+ * They memoize individually on size and mtime, which is exactly the thing that changes on every
+ * write while a session is running, so during a run they all missed together and re-read the
+ * same bytes. One entry, because only the newest read is ever wanted again immediately.
+ */
+let edgeCache: { key: string; text: string } | undefined;
+
 async function readEdge(file: string, bytes: number, from: 'head' | 'tail'): Promise<string> {
   const handle = await fs.open(file, 'r');
   try {
-    const { size } = await handle.stat();
+    const { size, mtimeMs } = await handle.stat();
     const len = Math.min(bytes, size);
+    const key = `${file}:${from}:${len}:${size}:${mtimeMs}`;
+    if (edgeCache?.key === key) return edgeCache.text;
     const buf = Buffer.alloc(len);
     await handle.read(buf, 0, len, from === 'head' ? 0 : Math.max(0, size - len));
-    return buf.toString('utf8');
+    const text = buf.toString('utf8');
+    edgeCache = { key, text };
+    return text;
   } finally {
     await handle.close();
   }

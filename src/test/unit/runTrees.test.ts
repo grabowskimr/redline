@@ -64,6 +64,37 @@ describe('run trees recorded by the hook', () => {
     assert.equal((await readRunTrees(repo, home))?.before?.session, undefined);
   });
 
+  it('remembers the runs before this one, with both ends of each', async () => {
+    // Sending a follow-up moves the boundary, which used to put the run you were reading
+    // permanently out of reach.
+    await started({
+      before: { at: '2026-08-28T12:00:00.000Z', tree: A },
+      history: [
+        { at: '2026-08-28T11:00:00.000Z', tree: B, after: A, session: 's' },
+        { at: '2026-08-28T10:00:00.000Z', tree: A, after: B },
+      ],
+    });
+    const trees = await readRunTrees(repo, home);
+    assert.equal(trees?.history?.length, 2);
+    assert.equal(trees?.history?.[0]?.after, A, 'the tree that run left behind');
+    assert.equal(trees?.history?.[0]?.session, 's');
+  });
+
+  it('drops a remembered run that never finished, since it has nothing to compare to', async () => {
+    await started({
+      before: { at: '2026-08-28T12:00:00.000Z', tree: A },
+      history: [{ at: '2026-08-28T11:00:00.000Z', tree: B }],
+    });
+    assert.equal((await readRunTrees(repo, home))?.history, undefined);
+  });
+
+  it('ignores history from a hook that writes something else entirely', async () => {
+    await started({ before: { at: '2026-08-28T12:00:00.000Z', tree: A }, history: 'nonsense' });
+    const trees = await readRunTrees(repo, home);
+    assert.equal(trees?.before?.tree, A, 'the run itself still reads');
+    assert.equal(trees?.history, undefined);
+  });
+
   it('rejects anything that is not a tree hash, rather than passing it to git', async () => {
     await started({ before: { at: '2026-08-27T10:00:00.000Z', tree: 'HEAD; rm -rf /' } });
     assert.equal(await readRunTrees(repo, home), undefined);

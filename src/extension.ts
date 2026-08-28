@@ -238,6 +238,7 @@ async function activateInner(
     'redline.markBaseline': batch.markBaseline,
     'redline.clearBaseline': batch.clearBaseline,
     'redline.refresh': batch.refresh,
+    'redline.reviewPreviousRun': batch.reviewPreviousRun,
     'redline.setUpHook': () => setUpHook(context, logger),
     'redline.showLog': batch.showLog,
     'redline.focusPanel': () => vscode.commands.executeCommand(`${CARDS_VIEW_ID}.focus`),

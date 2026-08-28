@@ -2,7 +2,6 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { TREE_SIDE_SCHEME } from '../../../git/snapshotTree';
 import type { RedlineApi } from '../../../extension';
 
 const EXT_ID = 'marcin.redline';
@@ -69,10 +68,16 @@ describe('the run Claude just finished', function () {
 
     const created = byPath.get('src/utils.ts');
     assert.ok(created, 'the file the run created is in the diff');
-    assert.equal(created[1].scheme, TREE_SIDE_SCHEME, 'its left side comes from the snapshot');
+    // Labelled rather than merely empty: the multi-file editor shows this above the entry, and
+    // an unlabelled empty pane reads the same as a file that lost all its content.
+    assert.match(created[1].path, /utils\.ts \(new file\)$/, 'the left side says what happened');
     const left = await vscode.workspace.openTextDocument(created[1]);
     assert.equal(left.getText(), '', 'and is empty, because the file did not exist then');
     assert.equal(created[2].scheme, 'file', 'the whole new file on the right');
+
+    const removed = byPath.get('src/gone.ts');
+    assert.ok(removed, 'the deleted file is in the diff');
+    assert.match(removed[2].path, /gone\.ts \(deleted\)$/, 'and its right side says so');
 
     const deleted = byPath.get('src/gone.ts');
     assert.ok(deleted, 'the deleted file is in the diff');

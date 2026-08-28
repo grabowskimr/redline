@@ -211,6 +211,9 @@ async function snapshotTree(root) {
 /** Beyond this the snapshot is holding up the turn; the older signals cover the gap. */
 const SNAPSHOT_TIMEOUT_MS = 30_000;
 
+/** How many finished runs stay reachable. */
+const MAX_RUN_HISTORY = 5;
+
 /**
  * Record the tree the run starts from.
  *
@@ -225,13 +228,39 @@ async function recordRunStart(root, sessionId) {
   await mkdir(dir, { recursive: true });
   const file = join(dir, 'runs.json');
   const temp = `${file}.tmp`;
+
+  // The run that is ending keeps its pair, so it can still be looked at after the next one
+  // starts. Without this, submitting a follow-up puts the previous run permanently out of
+  // reach — the trees are still in the object store, but nothing remembers which they were.
+  let history = [];
+  try {
+    const prev = JSON.parse(await readFile(file, 'utf8'));
+    if (prev?.before?.tree) {
+      let after;
+      try {
+        const stopped = JSON.parse(await readFile(join(dir, 'stopped.json'), 'utf8'));
+        // Only if it belongs to the run that is ending, not to an older one.
+        if (stopped?.tree && Date.parse(stopped.at) >= Date.parse(prev.before.at)) after = stopped.tree;
+      } catch {
+        // never stopped, or a hook too old to record it
+      }
+      history = [{ ...prev.before, after }, ...(Array.isArray(prev.history) ? prev.history : [])];
+    }
+  } catch {
+    // no previous run here
+  }
   // Renamed into place: Redline could otherwise read a half-written file and see no run at all.
   // The session is recorded so the two ends of a run can be checked against each other: two
   // sessions working in one repository overwrite each other's marker, and a "before" from a
   // different session than the one that stopped describes a different run.
   await writeFile(
     temp,
-    JSON.stringify({ before: { at: new Date().toISOString(), tree, session: sessionId || '' } }),
+    JSON.stringify({
+      before: { at: new Date().toISOString(), tree, session: sessionId || '' },
+      // A handful is enough to answer "what did the run before this one do?"; keeping more
+      // would pin objects in the repository indefinitely for no one.
+      history: history.slice(0, MAX_RUN_HISTORY),
+    }),
     'utf8',
   );
   await rename(temp, file);

@@ -27,6 +27,14 @@ export interface RunTree {
 export interface RunTrees {
   before?: RunTree;
   after?: RunTree;
+  /** Finished runs, newest first, kept so they can still be looked at. */
+  history?: PastRun[];
+}
+
+/** A run that has already finished: both of its ends. */
+export interface PastRun extends RunTree {
+  /** The tree the run left behind. */
+  after: string;
 }
 
 /**
@@ -119,6 +127,20 @@ export async function readRunTrees(root: string, home?: string): Promise<RunTree
     if (typeof stopped.session === 'string') after.session = stopped.session;
     if (isTree(after)) trees.after = after;
   }
-  if (!trees.before && !trees.after) return undefined;
+  const past = started?.history;
+  if (Array.isArray(past)) {
+    const history: PastRun[] = [];
+    for (const raw of past) {
+      const e = raw as Partial<PastRun>;
+      // Read before the guard: narrowing to `RunTree` drops the field this one adds.
+      const after = e.after;
+      if (!isTree(e) || typeof after !== 'string' || !/^[0-9a-f]{40,64}$/.test(after)) continue;
+      const run: PastRun = { at: e.at, tree: e.tree, after };
+      if (typeof e.session === 'string') run.session = e.session;
+      history.push(run);
+    }
+    if (history.length > 0) trees.history = history;
+  }
+  if (!trees.before && !trees.after && !trees.history) return undefined;
   return trees;
 }

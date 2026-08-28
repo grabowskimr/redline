@@ -35,6 +35,7 @@ function element(tag: string, attrs: Record<string, string> = {}): any {
     closest: (sel: string) => {
       if (sel.includes('card')) return el.isCard ? el : (el.parentCard ?? null);
       if (sel.includes('actions') || sel.includes('controls')) return el.scope ?? null;
+      if (sel.includes('data-filter')) return el.dataset.filter ? el : null;
       if (sel.includes('data-global')) return el.dataset.global ? el : null;
       if (sel.includes('data-act')) return el.dataset.act ? el : null;
       if (sel.includes('data-shot') || sel.includes('data-unshot')) return null;
@@ -577,5 +578,143 @@ describe('sending a second round', () => {
     const html = renderSent([answered(), answered({ id: 'n2', seq: 2 })]);
     assert.doesNotMatch(html, /data-global="redline\.submit"/);
     assert.match(html, /clear sent/, 'the section is still there');
+  });
+});
+
+describe('repainting the panel', () => {
+  it('leaves the DOM alone when nothing it shows has changed', () => {
+    // Every store change re-renders, including ones that touch nothing here — a run finishing,
+    // a hash being refreshed. Rebuilding identical markup drops the scroll position and any
+    // selection, which is what made the panel flicker while Claude was working.
+    const h = harness();
+    const message = {
+      type: 'notes',
+      groups: [{ base: 'a.ts', dir: 'src', notes: [{ id: 'n1', seq: 1, kind: 'comment', kindIcon: 'comment', where: 'L1', body: 'x' }] }],
+      sent: [],
+      kinds: [],
+    };
+    h.fire('message', { data: message });
+    const first = h.root.innerHTML;
+    const node = h.root.firstChild;
+    h.fire('message', { data: message });
+    assert.equal(h.root.innerHTML, first, 'same markup');
+    assert.equal(h.root.firstChild, node, 'and the same nodes — nothing was rebuilt');
+  });
+
+  it('still repaints when something did change', () => {
+    const h = harness();
+    const msg = (body: string): Record<string, unknown> => ({
+      type: 'notes',
+      groups: [{ base: 'a.ts', dir: 'src', notes: [{ id: 'n1', seq: 1, kind: 'comment', kindIcon: 'comment', where: 'L1', body }] }],
+      sent: [],
+      kinds: [],
+    });
+    h.fire('message', { data: msg('first') });
+    h.fire('message', { data: msg('second') });
+    assert.match(h.root.innerHTML, /second/);
+  });
+});
+
+describe('filtering by state', () => {
+  /** Clicks a chip through the same delegated handler the panel installs. */
+  const clickFilter = (h: Harness, which: string): void => {
+    h.fire('click', { target: element('button', { filter: which }), preventDefault() {}, stopPropagation() {} });
+  };
+
+  const many = (notes: Array<Record<string, unknown>>): Record<string, unknown> => ({
+    type: 'notes',
+    groups: [{ base: 'a.ts', dir: 'src', notes, kinds: [] }],
+    sent: [],
+    kinds: [],
+  });
+  const n = (id: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id, seq: Number(id.slice(1)), kind: 'comment', kindIcon: 'comment', where: 'L1', body: 'note ' + id, ...over,
+  });
+
+  it('stays out of the way until there is enough to lose something in', () => {
+    const h = harness();
+    h.fire('message', { data: many([n('n1'), n('n2'), n('n3')]) });
+    assert.doesNotMatch(h.root.innerHTML, /data-filter/, 'three notes need no filter');
+  });
+
+  it('offers the states that are actually present, with counts', () => {
+    const h = harness();
+    h.fire('message', {
+      data: many([
+        n('n1'), n('n2'),
+        n('n3', { sent: { changed: true } }),
+        n('n4', { sent: { outcome: 'done' }, done: true }),
+        n('n5', { sent: { outcome: 'answered' } }),
+        n('n6'),
+      ]),
+    });
+    const html = h.root.innerHTML;
+    assert.match(html, /data-filter="all"[^>]*>all <span class="n">6</);
+    assert.match(html, /data-filter="waiting"[^>]*>waiting <span class="n">3</, 'three still waiting on Claude');
+    assert.match(html, /data-filter="answered"[^>]*>answered <span class="n">2</);
+    assert.match(html, /data-filter="done"[^>]*>done <span class="n">1</);
+  });
+
+  it('shows only the chosen state, and clears when the lit chip is clicked again', () => {
+    const h = harness();
+    h.fire('message', {
+      data: many([n('n1'), n('n2'), n('n3'), n('n4'), n('n5'), n('n6', { sent: { outcome: 'done' }, done: true })]),
+    });
+    clickFilter(h, 'done');
+    assert.match(h.root.innerHTML, /note n6/);
+    assert.doesNotMatch(h.root.innerHTML, /note n1/, 'the waiting ones are hidden');
+
+    clickFilter(h, 'done');
+    assert.match(h.root.innerHTML, /note n1/, 'clicking it again clears the filter');
+  });
+
+  it('gives way rather than showing an empty panel when the last match goes', () => {
+    const h = harness();
+    const withDone = [n('n1'), n('n2'), n('n3'), n('n4'), n('n5'), n('n6', { sent: { outcome: 'done' }, done: true })];
+    h.fire('message', { data: many(withDone) });
+    clickFilter(h, 'done');
+    assert.doesNotMatch(h.root.innerHTML, /note n1/);
+    // The done note is deleted; the filter it was the only member of no longer matches anything.
+    h.fire('message', { data: many(withDone.slice(0, 5)) });
+    assert.match(h.root.innerHTML, /note n1/, 'back to showing everything');
+  });
+});
+
+describe('a note pointing at something that is gone', () => {
+  const render = (note: Record<string, unknown>): string => {
+    const h = harness();
+    h.fire('message', {
+      data: {
+        type: 'notes',
+        groups: [{ base: 'a.ts', dir: 'src', notes: [{ kind: 'comment', kindIcon: 'comment', where: 'L12', ...note }] }],
+        sent: [],
+        kinds: [],
+      },
+    });
+    return h.root.innerHTML;
+  };
+
+  it('says so when the file has been deleted, and stops offering to open it', () => {
+    // Claude deleting a file left its notes looking perfectly healthy — clicking one did
+    // nothing at all, with no sign of why.
+    const html = render({ id: 'n1', seq: 1, body: 'rename this', missing: true, snippet: 'const a = 1' });
+    assert.match(html, /class="where gone"/);
+    assert.doesNotMatch(html, /class="where gone"[^>]*data-act="reveal"/, 'no longer opens');
+    assert.match(html, /the file is gone/);
+  });
+
+  it('marks a note whose lines have moved out from under it', () => {
+    // `orphaned` was computed, sent to the panel, and then never rendered.
+    const html = render({ id: 'n1', seq: 1, body: 'x', orphaned: true, snippet: 'const a = 1' });
+    assert.match(html, /class="where stale"/);
+    assert.match(html, /may be wrong/);
+    assert.match(html, /data-act="reveal"/, 'still worth opening — the file is there');
+  });
+
+  it('leaves a healthy note alone', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'x', snippet: 'const a = 1' });
+    assert.doesNotMatch(html, /class="where gone"/);
+    assert.doesNotMatch(html, /class="where stale"/);
+    assert.match(html, /Open in editor/);
   });
 });

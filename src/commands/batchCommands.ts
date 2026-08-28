@@ -40,6 +40,15 @@ const SAME_REPORT_MS = 2 * 60_000;
 export function batchCommands(deps: Deps) {
   const { store, config, logger, index, range, watcher } = deps;
 
+  /** "14:22" for something today, a date for anything older. */
+  function shortWhen(iso: string): string {
+    const at = new Date(iso);
+    const today = new Date().toDateString() === at.toDateString();
+    return today
+      ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : at.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
   function summary(count: number, files: number): string {
     return `${count} note${count === 1 ? '' : 's'} across ${files} file${files === 1 ? '' : 's'}`;
   }
@@ -453,10 +462,17 @@ export function batchCommands(deps: Deps) {
     const behaviour = config.onRunFinished;
     if (behaviour === 'nothing') return;
 
-    // The panel is the display, so it is brought forward either way — the notification is
-    // just what makes it noticeable when the panel is not the active view.
     if (changes && behaviour === 'open') {
       await reviewChanges();
+      return;
+    }
+
+    // Quieter than a notification and less intrusive than taking over the editor: the panel
+    // comes forward with the new figures, and the summary goes to the status bar where it can
+    // be ignored.
+    if (behaviour === 'reveal') {
+      await vscode.commands.executeCommand('redline.focusPanel');
+      void vscode.window.setStatusBarMessage(`Redline: Claude finished — ${summaryText}`, 10_000);
       return;
     }
 
@@ -601,10 +617,22 @@ export function batchCommands(deps: Deps) {
     }
     const count = scope === 'recent' ? s.recentCount : s.fileCount;
     if (count === 0) {
+      // A dead end otherwise: the last run changed nothing, and the thing you almost certainly
+      // want next — everything since the base — is one click away and was not offered.
+      if (scope === 'recent' && s.fileCount > 0) {
+        const other = `${s.fileCount} file${s.fileCount === 1 ? '' : 's'}`;
+        const choice = await vscode.window.showInformationMessage(
+          `Redline: the last run changed nothing. ${other} changed ${s.label}.`,
+          'Show all changes',
+        );
+        if (choice === 'Show all changes') await openChanges('all');
+        return;
+      }
       void vscode.window.showInformationMessage(`Redline: nothing changed ${s.label}.`);
       return;
     }
-    const files = `${count} file${count === 1 ? '' : 's'}`;
+    const breakdown = await range.statusBreakdown(scope);
+    const files = `${count} file${count === 1 ? '' : 's'}${breakdown ? ` (${breakdown})` : ''}`;
     const title = scope === 'recent' ? `Latest changes — ${files} ${s.recentLabel}` : `All changes — ${files} ${s.label}`;
     await vscode.commands.executeCommand('vscode.changes', title, await range.diffResources(scope));
     if (scope === 'recent' && s.olderCount > 0) {
@@ -617,6 +645,44 @@ export function batchCommands(deps: Deps) {
           if (choice === 'Show all changes') void openChanges('all');
         });
     }
+  }
+
+  /**
+   * The diff of a run that has already finished.
+   *
+   * Sending a follow-up moves the boundary, so the run you were reading a moment ago stops
+   * being "the last run" — and there was no way back to it.
+   */
+  async function reviewPreviousRun(): Promise<void> {
+    const runs = await progress('looking for earlier runs…', () => range.pastRuns());
+    if (runs.length === 0) {
+      void vscode.window.showInformationMessage(
+        'Redline: no earlier runs recorded here yet. The Claude Code plugin remembers the last few.',
+      );
+      return;
+    }
+    const items = await Promise.all(
+      runs.map(async (run) => {
+        const { count } = await range.diffForRun(run);
+        return {
+          label: `${shortWhen(run.at)} — ${count} file${count === 1 ? '' : 's'}`,
+          description: new Date(run.at).toLocaleString(),
+          run,
+          count,
+        };
+      }),
+    );
+    const picked = await vscode.window.showQuickPick(
+      items.filter((i) => i.count > 0),
+      { placeHolder: 'Which run?' },
+    );
+    if (!picked) return;
+    const { pairs } = await range.diffForRun(picked.run);
+    await vscode.commands.executeCommand(
+      'vscode.changes',
+      `Run at ${shortWhen(picked.run.at)} — ${picked.count} file${picked.count === 1 ? '' : 's'}`,
+      pairs,
+    );
   }
 
   const reviewChanges = (): Promise<void> => openChanges('recent');
@@ -703,6 +769,7 @@ export function batchCommands(deps: Deps) {
     pickSession,
     reviewChanges,
     reviewAllChanges,
+    reviewPreviousRun,
     nextChange,
     prevChange,
     markBaseline,

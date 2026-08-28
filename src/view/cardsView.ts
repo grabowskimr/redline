@@ -47,6 +47,8 @@ interface CardData {
   where: string;
   done: boolean;
   orphaned: boolean;
+  /** The file the note points at is no longer on disk. */
+  missing?: boolean;
   attachments: Array<{ src: string; path: string; name: string }>;
   sent?: { outcome?: string; reply?: string; changed: boolean };
   /** A reply is written but not sent: the card stays active and offers ➤. */
@@ -168,6 +170,8 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.notesTimer = undefined;
       this.postNotes();
       void this.postSession();
+      // Off the render path: it re-posts only if the answer moved.
+      void this.refreshMissing();
     }, 60);
   }
 
@@ -243,6 +247,44 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
    * Whether the plugin has recorded a run in this repository. Enough to say Redline is
    * connected to *something*, even with no process to point at — the session may have exited.
    */
+  /**
+   * Files that notes point at and that are no longer there.
+   *
+   * Claude deleting a file leaves its notes pointing at nothing: opening one does nothing, the
+   * snippet is stale and there is no sign of why. Kept as a set rather than checked during
+   * render, because building the card model is synchronous and this is a disk call per path.
+   */
+  private missing = new Set<string>();
+
+  private isMissing(n: ReviewNote): boolean {
+    const p = uriForNote(n.path, n.workspaceFolder)?.fsPath;
+    return p !== undefined && this.missing.has(p);
+  }
+
+  private async refreshMissing(): Promise<void> {
+    // A note whose folder has left the workspace has no path to check; it is already
+    // unreachable and saying "deleted" about it would be a guess.
+    const paths = new Set(
+      this.store.notes
+        .map((n) => uriForNote(n.path, n.workspaceFolder)?.fsPath)
+        .filter((p): p is string => p !== undefined),
+    );
+    const gone = new Set<string>();
+    await Promise.all(
+      [...paths].map(async (p) => {
+        try {
+          await vscode.workspace.fs.stat(vscode.Uri.file(p));
+        } catch {
+          gone.add(p);
+        }
+      }),
+    );
+    const same = gone.size === this.missing.size && [...gone].every((p) => this.missing.has(p));
+    if (same) return; // nothing to redraw, and re-posting would loop
+    this.missing = gone;
+    this.postNotes();
+  }
+
   private async hookIsLive(): Promise<boolean> {
     const root = await this.range?.repoRoot();
     if (!root) return false;
@@ -284,6 +326,7 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       where: formatLineRange(n.range),
       done: n.done,
       orphaned: !!n.anchor.orphaned,
+      ...(this.isMissing(n) ? { missing: true } : {}),
       attachments: (n.attachments ?? []).map((p) => ({
         src: this.view ? this.view.webview.asWebviewUri(vscode.Uri.file(p)).toString() : '',
         path: p,

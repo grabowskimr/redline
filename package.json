@@ -2,7 +2,7 @@
   "name": "redline",
   "displayName": "Redline",
   "description": "Review Claude Code's work — inline notes on the lines that need changes, handed back as one prompt.",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "publisher": "marcin",
   "license": "MIT",
   "repository": {
@@ -304,6 +304,12 @@
         "icon": "$(diff-multiple)"
       },
       {
+        "command": "redline.reviewPreviousRun",
+        "title": "Review a Previous Run",
+        "category": "Redline",
+        "icon": "$(history)"
+      },
+      {
         "command": "redline.replyToNote",
         "title": "Add Follow-up",
         "category": "Redline",
@@ -494,6 +500,11 @@
           "command": "redline.reviewAllChanges",
           "when": "view == redline.cards",
           "group": "1_config@0"
+        },
+        {
+          "command": "redline.reviewPreviousRun",
+          "when": "view == redline.cards",
+          "group": "1_config@0.5"
         }
       ],
       "editor/context": [
@@ -726,11 +737,13 @@
           "type": "string",
           "enum": [
             "notify",
+            "reveal",
             "open",
             "nothing"
           ],
           "enumDescriptions": [
             "Show a notification with the file count and a Review changes button.",
+            "Bring the panel forward and put the summary in the status bar.",
             "Open the last run’s diff straight away.",
             "Update the panel only."
           ],

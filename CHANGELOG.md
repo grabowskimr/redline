@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.2.0 — 2026-08-28
+
+Ten improvements, four of them to how much work the extension does when nothing is happening.
+
+**Interface**
+
+- The diff says what happened to each file. An added file's empty side is labelled *(new file)*
+  and a deleted one's *(deleted)*, which the multi-file editor shows above each entry — a
+  deletion used to read exactly like an edit until you opened it. The title carries the
+  breakdown too: *3 files (1 new, 1 deleted, 1 edited)*.
+- **Last changed nothing** is no longer a dead end: when the run changed nothing but the
+  working tree has changes, it offers them.
+- **Redline: Review a Previous Run** diffs a run that has already finished. The plugin
+  remembers the last five, both ends of each, so sending a follow-up no longer puts the run you
+  were reading out of reach.
+- Notes filter by state — *waiting*, *answered*, *done* — as chips above the list, appearing
+  only once there are enough notes to lose something in.
+- A note whose file has been **deleted** says so and stops offering to open it. A note whose
+  lines have **moved out from under it** is marked as well: that state was computed and sent to
+  the panel all along, and then never drawn.
+- `redline.onRunFinished` gains **`reveal`**: bring the panel forward and put the summary in the
+  status bar, without a notification or taking over the editor.
+
+**Performance**
+
+- The panel no longer rebuilds its markup when nothing it shows has changed. Every store change
+  redrew everything — including changes that touch none of it — which dropped the scroll
+  position and any selection, and is what made it flicker while Claude worked. Scroll position
+  survives a real redraw now too.
+- Resolving the base ran a `git` spawn and a transcript read one after the other when neither
+  needed the other; same for the published floor and HEAD.
+- Several answers come out of the same tail of a transcript, and each was opening and reading
+  the file again. They share one read now — they memoize on size and mtime, which is exactly
+  what changes on every write while a session is running, so during a run they all missed
+  together.
+- A pinned baseline dated its pre-existing untracked files one `stat` at a time in a loop.
+- Requires plugin **0.3.0**: `claude plugin update redline`.
+
 ## 1.1.1 — 2026-08-28
 
 Three bugs in yesterday's second-round sending, all of them only reachable because a batch can

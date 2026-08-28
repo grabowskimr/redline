@@ -50,6 +50,7 @@ export const COMMAND_IDS = [
   'redline.refresh',
   'redline.focusPanel',
   'redline.showLog',
+  'redline.reviewPreviousRun',
   'redline.setUpHook',
 ] as const;
 

@@ -620,3 +620,42 @@ h3 {
 .sentbar .primary:hover {
   background: var(--vscode-button-hoverBackground);
 }
+
+/* ── state filter ────────────────────────────────────────────────────── */
+.filters {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px 2px;
+  flex-wrap: wrap;
+}
+.filters .chip {
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  border: 1px solid var(--vscode-widget-border, transparent);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: calc(var(--vscode-font-size) - 2px);
+  cursor: pointer;
+}
+.filters .chip:hover {
+  color: var(--vscode-foreground);
+}
+.filters .chip.on {
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-color: transparent;
+}
+.filters .chip .n {
+  opacity: 0.7;
+  margin-left: 1px;
+}
+
+/* A note pointing at something that is no longer there. */
+.where.gone {
+  color: var(--vscode-errorForeground);
+  text-decoration: line-through;
+  cursor: default;
+}
+.where.stale {
+  color: var(--vscode-editorWarning-foreground);
+}

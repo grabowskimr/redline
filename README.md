@@ -79,6 +79,14 @@ Each follow-up carries its own thread — the note, Claude's answer, your reply 
 with the context it is replying to, and the whole batch goes to the session that conversation
 already lives in, without asking you which one.
 
+## Going back
+
+**Redline: Review a Previous Run** opens the diff of a run that has already finished. The
+plugin remembers the last five, both ends of each, so sending a follow-up no longer puts the
+run you were reading out of reach. Both sides come from snapshots rather than from disk — the
+working tree has moved on, and showing today's file beside that run's starting point would
+attribute everything since to it.
+
 ## When you are done
 
 Reply with one line per note so I can track it, using exactly this format:
@@ -161,8 +169,8 @@ changed, and the panel updates the same way.
 
 When the run stops you get **Claude finished — 4 files changed** with a **Review changes**
 button, and the panel's figures move with it. `redline.onRunFinished` decides what happens:
-`notify` (the default), `open` to go straight to the diff, or `nothing` to leave it to the
-panel.
+`notify` (the default), `reveal` to bring the panel forward with the summary in the status bar,
+`open` to go straight to the diff, or `nothing` to leave it to the panel.
 
 This used to depend on Redline finding a session it could *type into*, so a session running
 outside VS Code's own terminals was never reported at all — even though the hook had recorded
@@ -291,7 +299,7 @@ finishes while VS Code is open pings you with the diff.
 | `redline.claudeAutoSubmit` | `true` | Press Enter for you in the session |
 | `redline.clearDoneAfterReport` | `false` | Remove notes Claude reported as done, instead of leaving them for a reply |
 | `redline.watchSessions` | `true` | Watch the session and offer the diff when a run ends |
-| `redline.onRunFinished` | `notify` | When a run ends: `notify`, `open` the diff, or `nothing` |
+| `redline.onRunFinished` | `notify` | When a run ends: `notify`, `reveal` the panel, `open` the diff, or `nothing` |
 | `redline.excludeGlobs` | `node_modules`, `dist`, `*.min.*`, `.git` | No `+` in these files |
 | `redline.maxFileLines` | `50000` | No `+` in files longer than this |
 | `redline.showStatusBar` | `true` | Note and changed-file counts in the status bar |

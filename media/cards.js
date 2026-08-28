@@ -187,9 +187,11 @@
     const settled = !!(n.done || (n.sent && n.sent.outcome)) && !n.pendingReply;
 
     const beforeAfter = n.after !== undefined && n.after !== null;
-    const codeLabel = n.orphaned
-      ? 'original code (stale)'
-      : esc(n.where) + (n.language ? ' · ' + esc(n.language) : '');
+    const codeLabel = n.missing
+      ? 'original code (the file is gone)'
+      : n.orphaned
+        ? 'original code (stale)'
+        : esc(n.where) + (n.language ? ' · ' + esc(n.language) : '');
     const snippet = n.snippet
       ? codeBox(
           beforeAfter ? 'before' : '',
@@ -279,9 +281,22 @@
       ' ' +
       esc(n.kindLabel) +
       '</span>' +
-      '<span class="where" data-act="reveal" title="Open in editor">' +
-      esc(n.where) +
-      '</span>' +
+      // A note whose file has been deleted, or whose lines have moved out from under it:
+      // both were shown exactly like a healthy note, so opening one quietly did nothing.
+      (n.missing
+        ? '<span class="where gone" title="This file has been deleted — the note is kept for the record">' +
+          icon('trash') +
+          ' ' +
+          esc(n.where) +
+          '</span>'
+        : '<span class="where' +
+          (n.orphaned ? ' stale' : '') +
+          '" data-act="reveal" title="' +
+          (n.orphaned ? 'The code this note pointed at has moved; the line may be wrong' : 'Open in editor') +
+          '">' +
+          (n.orphaned ? icon('warning') + ' ' : '') +
+          esc(n.where) +
+          '</span>') +
       '<span class="spacer"></span>' +
       (status ? '<span class="status">' + status + '</span>' : '') +
       '</div>' +
@@ -407,16 +422,67 @@
     );
   }
 
+  /**
+   * Which notes to show. A round of twenty leaves the two that still need you buried in the
+   * ones that are settled, and scrolling to find them is the whole problem.
+   *
+   *   waiting  — you have not sent it, or you have and nothing has come back
+   *   answered — Claude replied or changed the code, and you have not closed it out
+   *   done     — settled, kept for the record
+   */
+  var FILTERS = ['all', 'waiting', 'answered', 'done'];
+  var FILTER_LABEL = { all: 'all', waiting: 'waiting', answered: 'answered', done: 'done' };
+  var filter = 'all';
+
+  function bucket(n) {
+    if (n.done || (n.sent && n.sent.outcome === 'done' && !n.pendingReply)) return 'done';
+    if (n.sent && (n.sent.outcome || n.sent.changed) && !n.pendingReply) return 'answered';
+    return 'waiting';
+  }
+
+  function keep(n) {
+    return filter === 'all' || bucket(n) === filter;
+  }
+
+  function filterBar(counts, total) {
+    // Only worth the room once there is enough to lose something in.
+    if (total < 6) return '';
+    var html = '<div class="filters">';
+    for (var i = 0; i < FILTERS.length; i++) {
+      var f = FILTERS[i];
+      var n = f === 'all' ? total : counts[f] || 0;
+      if (f !== 'all' && n === 0) continue;
+      html +=
+        '<button class="chip' + (filter === f ? ' on' : '') + '" data-filter="' + f + '">' +
+        FILTER_LABEL[f] + ' <span class="n">' + n + '</span></button>';
+    }
+    return html + '</div>';
+  }
+
   function render() {
     if (!ready) return;
     let html = sessionStrip();
     if (!state.groups.length && !state.sent.length) {
       html +=
         '<div class="empty">No review notes yet.<br><br>Hover a line in the editor and click the ➕ in the gutter, or select lines and press ⌘⌥M / Ctrl+Alt+M.<br><br>Screenshots: paste with ⌘V onto a note, click 📎, or hold ⇧ while dragging the image onto a card.</div>';
-      root.innerHTML = html;
+      paint(html);
       return;
     }
+    var everyNote = [];
+    for (const g of state.groups) everyNote = everyNote.concat(g.notes);
+    everyNote = everyNote.concat(state.sent);
+    var counts = {};
+    for (var i = 0; i < everyNote.length; i++) {
+      var b = bucket(everyNote[i]);
+      counts[b] = (counts[b] || 0) + 1;
+    }
+    // A filter that hides everything is a dead end, so it gives way rather than showing a
+    // blank panel — the chip stays lit so it is obvious what happened.
+    if (filter !== 'all' && !(counts[filter] > 0)) filter = 'all';
+    html += filterBar(counts, everyNote.length);
+
     for (const g of state.groups) {
+      if (!g.notes.some(keep)) continue;
       html +=
         '<div class="file"><span class="base">' +
         esc(g.base) +
@@ -427,7 +493,7 @@
         '</span><span class="count">' +
         g.notes.length +
         '</span></div>';
-      html += g.notes.map(card).join('');
+      html += g.notes.filter(keep).map(card).join('');
     }
     if (state.sent.length) {
       const addressed = state.sent.filter((n) => n.sent && (n.sent.outcome || n.sent.changed)).length;
@@ -449,9 +515,34 @@
           : '') +
         '<button data-global="redline.clearSent" title="Archive these and clear the section">✓ clear sent</button>' +
         '</div>';
-      html += state.sent.map(card).join('');
+      html += state.sent.filter(keep).map(card).join('');
     }
+    paint(html);
+  }
+
+  /**
+   * Write the panel, but only when it would actually differ.
+   *
+   * Every store change re-renders, and a store change happens for things that do not touch
+   * this markup at all — a run finishing, a note's hash being refreshed, the range being
+   * recomputed. Rebuilding identical HTML re-parses every card, drops the scroll position and
+   * loses any text selection, which is what made the panel feel like it was flickering while
+   * Claude worked.
+   */
+  var painted = '';
+  function paint(html) {
+    if (html === painted) return;
+    painted = html;
+    // Not every host gives us a scrolling element — guard rather than assume, since throwing
+    // here would take the whole panel down.
+    var scroller = document.scrollingElement || document.documentElement;
+    var top = scroller ? scroller.scrollTop : 0;
     root.innerHTML = html;
+    // Restoring unconditionally would fight a deliberate scroll-to-top; only put it back when
+    // the content is still tall enough for the old position to mean anything.
+    if (scroller && top > 0 && scroller.scrollHeight > scroller.clientHeight + top) {
+      scroller.scrollTop = top;
+    }
   }
 
   function scheduleRender() {
@@ -522,6 +613,13 @@
     const ref = e.target.closest('[data-open]');
     if (ref) {
       post({ type: 'openPath', text: ref.dataset.open });
+      return;
+    }
+    const chip = e.target.closest('[data-filter]');
+    if (chip) {
+      // Clicking the lit one clears it, so the filter never needs a separate reset.
+      filter = filter === chip.dataset.filter ? 'all' : chip.dataset.filter;
+      render();
       return;
     }
     const global = e.target.closest('[data-global]');
