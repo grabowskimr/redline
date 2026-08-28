@@ -276,28 +276,31 @@
     return '';
   }
 
-  /** Screenshots attached to a note, removable while the note is still live. */
-  function shotsOf(n, settled) {
-    const shots = n.attachments || [];
+  /**
+   * Screenshots on a card.
+   *
+   * A row each rather than a strip of thumbnails: the name is what you recognise it by after
+   * the fact, and which turn it belongs to is worth saying — a picture attached to a follow-up
+   * is evidence for that follow-up, not for the note.
+   */
+  function shotsOf(n, settled, which) {
+    const shots = (n.attachments || []).filter((a) =>
+      which === 'follow-up' ? a.followUp : !a.followUp,
+    );
     if (shots.length === 0) return '';
     return (
       '<div class="shots">' +
       shots
         .map(
           (a) =>
-            '<span class="shot"><img src="' +
-            esc(a.src) +
-            '" alt="' +
-            esc(a.name) +
-            '" title="' +
-            esc(a.name) +
-            ' — click to open" data-shot="' +
-            esc(a.path) +
-            '">' +
+            '<div class="shot">' +
+            '<img src="' + esc(a.src) + '" alt="' + esc(a.name) + '" data-shot="' + esc(a.path) + '" title="Open ' + esc(a.name) + '">' +
+            '<span class="what"><span class="name">' + esc(a.name) + '</span>' +
+            '<span class="cap">' + esc(a.caption || 'attached screenshot') + '</span></span>' +
             (settled
               ? ''
-              : '<span class="x" data-unshot="' + esc(a.path) + '" title="Remove screenshot">' + icon('close') + '</span>') +
-            '</span>',
+              : '<button class="x" data-unshot="' + esc(a.path) + '" title="Remove screenshot">' + icon('close') + '</button>') +
+            '</div>',
         )
         .join('') +
       '</div>'
@@ -351,6 +354,9 @@
           '<span class="block-label">You · follow-up</span>' +
           '<div class="ask">' +
           '<textarea rows="1" placeholder="Ask for a change or another attempt…"></textarea>' +
+          '<button class="clip" data-act="attach" title="Attach a screenshot to this follow-up">' +
+          icon('paperclip') +
+          '</button>' +
           '<span class="hint">⏎</span>' +
           '</div>' +
           '</div>'
@@ -358,7 +364,11 @@
 
     let actions = '';
     if (state === 'drafting') {
-      actions = '<div class="actions"><button class="go wide" data-act="send">Send to Claude</button></div>';
+      actions =
+        '<div class="actions">' +
+        '<button class="plain" data-act="attach">' + icon('paperclip') + ' Attach</button>' +
+        '<button class="go wide" data-act="send">Send to Claude</button>' +
+        '</div>';
     } else if (state === 'approve') {
       actions =
         '<div class="actions">' +
@@ -379,9 +389,9 @@
       meta +
       snippetBlock(n) +
       '<div class="say" data-act="reveal" title="Open in the editor">' + esc(n.body) + '</div>' +
-      shotsOf(n, false) +
+      shotsOf(n, state === 'done', 'note') +
       claudeBlock(n, state === 'rejected') +
-      (state === 'rejected' ? rejectionBlock(n) : '') +
+      (state === 'rejected' ? rejectionBlock(n) + shotsOf(n, true, 'follow-up') : '') +
       followUp +
       actions +
       '</div>'

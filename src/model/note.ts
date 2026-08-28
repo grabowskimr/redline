@@ -110,6 +110,15 @@ export interface ReviewNote {
   /** Absolute paths of attached images (screenshots), stored in extension storage. */
   attachments?: string[];
   /**
+   * For each attachment, how many turns the conversation had when it was attached.
+   *
+   * Runs alongside `attachments` rather than inside it, so an older note without it still
+   * reads. Zero means it belongs to the note itself; anything higher means it was attached to
+   * a follow-up, which is what the card says beneath it. Nothing else can tell the two apart:
+   * both are paths.
+   */
+  attachmentTurns?: number[];
+  /**
    * Set when the change Claude made was turned down.
    *
    * Not derivable: "there is a follow-up after its answer" is also what asking a further

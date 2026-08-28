@@ -57,7 +57,7 @@ interface CardData {
   orphaned: boolean;
   /** The file the note points at is no longer on disk. */
   missing?: boolean;
-  attachments: Array<{ src: string; path: string; name: string }>;
+  attachments: Array<{ src: string; path: string; name: string; caption: string; followUp: boolean }>;
   sent?: { outcome?: string; reply?: string; changed: boolean };
   /** A reply is written but not sent: the card stays active and offers ➤. */
   pendingReply?: boolean;
@@ -344,10 +344,15 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       done: n.done,
       orphaned: !!n.anchor.orphaned,
       ...(this.isMissing(n) ? { missing: true } : {}),
-      attachments: (n.attachments ?? []).map((p) => ({
+      attachments: (n.attachments ?? []).map((p, i) => ({
         src: this.view ? this.view.webview.asWebviewUri(vscode.Uri.file(p)).toString() : '',
         path: p,
         name: path.basename(p),
+        // What it is attached to, which is not recoverable from the path. The card puts the
+        // two in different places: a picture attached to a follow-up is evidence for the
+        // follow-up, not for the note.
+        followUp: ((n.attachmentTurns ?? [])[i] ?? 0) > 0,
+        caption: ((n.attachmentTurns ?? [])[i] ?? 0) > 0 ? 'attached to this follow-up' : 'attached screenshot',
       })),
     };
     if (n.suggestion !== undefined) c.suggestion = n.suggestion;

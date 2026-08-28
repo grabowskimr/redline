@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.1 — 2026-08-28
+
+- Screenshots are a row each now — thumbnail, name, and what they are attached to — rather than
+  a strip of thumbnails. After the fact you recognise a capture by its name, not by 46 pixels
+  of it.
+- A screenshot attached to a follow-up sits **with the follow-up**, captioned as one, instead
+  of with the note. Both are just paths, so which turn one belongs to is recorded when it is
+  attached — there is no way back to it afterwards.
+- **Attach** sits beside *Send to Claude* on a card that has not gone yet, and the follow-up box
+  has a paperclip of its own.
+- Fixed while adding it: removing a screenshot filtered the paths and not the turns beside them,
+  which would have shifted every later attachment onto the wrong caption.
+
 ## 1.5.0 — 2026-08-28
 
 **The cards are redesigned.** One column, no file headers — the cards come from all over a

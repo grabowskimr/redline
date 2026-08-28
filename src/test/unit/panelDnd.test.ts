@@ -497,11 +497,41 @@ describe('a card', () => {
     assert.match(html, /may be wrong/);
   });
 
-  it('keeps screenshots, and offers to take one off while the note is live', () => {
-    const shot = [{ src: 'vscode://x/a.png', path: '/tmp/a.png', name: 'a.png' }];
-    const html = render({ id: 'n1', seq: 1, body: 'x', attachments: shot });
+  it('names a screenshot and says what it is attached to', () => {
+    // A path is not a thing you recognise after the fact, and both kinds of attachment are
+    // paths — which turn one belongs to cannot be recovered from it.
+    const html = render({
+      id: 'n1', seq: 1, body: 'x',
+      attachments: [{ src: 'vscode://x/a.png', path: '/tmp/a.png', name: 'panel-spacing.png', caption: 'attached screenshot', followUp: false }],
+    });
+    assert.match(html, /panel-spacing\.png/);
+    assert.match(html, /attached screenshot/);
     assert.match(html, /data-shot="\/tmp\/a\.png"/);
-    assert.match(html, /data-unshot="\/tmp\/a\.png"/);
+    assert.match(html, /data-unshot="\/tmp\/a\.png"/, 'removable while the note is live');
+  });
+
+  it('puts a follow-up screenshot with the follow-up, not with the note', () => {
+    const html = render({
+      id: 'n1', seq: 1, body: 'why is this here?', rejected: true,
+      addenda: ['Claude: Skipped.', 'I wanted an explanation.'],
+      sent: { changed: false, outcome: 'answered' },
+      attachments: [{ src: 'vscode://x/b.png', path: '/tmp/b.png', name: 'expected-memo.png', caption: 'attached to this follow-up', followUp: true }],
+    });
+    assert.match(html, /expected-memo\.png/);
+    assert.match(html, /attached to this follow-up/);
+    assert.ok(
+      html.indexOf('You · rejected') < html.indexOf('expected-memo'),
+      'below the rejection it belongs to',
+    );
+    assert.doesNotMatch(html, /data-unshot/, 'already sent — nothing to take back');
+  });
+
+  it('offers to attach one before the note goes, and from the follow-up box', () => {
+    assert.match(render({ id: 'n1', seq: 1, body: 'x' }), /data-act="attach"[^>]*>.*Attach/);
+    const waiting = render({
+      id: 'n1', seq: 1, body: 'x', sent: { changed: true, outcome: 'done' }, addenda: ['Claude: done'],
+    });
+    assert.match(waiting, /class="clip" data-act="attach"/);
   });
 
   it('keeps delete and copy in the overflow, off the card face', () => {

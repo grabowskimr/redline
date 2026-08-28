@@ -46,7 +46,11 @@ export class Attachments {
     const target = vscode.Uri.joinPath(this.dir, `${note.seq}-${stamp}-${safeBase}.${ext}`);
     await vscode.workspace.fs.createDirectory(this.dir);
     await vscode.workspace.fs.writeFile(target, bytes);
-    this.store.update(noteId, { attachments: [...(note.attachments ?? []), target.fsPath] });
+    this.store.update(noteId, {
+      attachments: [...(note.attachments ?? []), target.fsPath],
+      // Recorded now, because after the next turn there is no way back to it.
+      attachmentTurns: [...(note.attachmentTurns ?? []), note.addenda.length],
+    });
     this.logger.info(`attached ${target.fsPath} to #${note.seq}`);
     return target.fsPath;
   }
@@ -112,8 +116,16 @@ export class Attachments {
     if (!note) return;
     // Only detach paths that are actually on this note — the webview message is data,
     // not a trusted instruction to delete an arbitrary file.
-    if (!(note.attachments ?? []).includes(fsPath)) return;
-    this.store.update(noteId, { attachments: (note.attachments ?? []).filter((a) => a !== fsPath) });
+    const paths = note.attachments ?? [];
+    const at = paths.indexOf(fsPath);
+    if (at < 0) return;
+    // Both arrays, by index. Filtering only the paths would shift every turn after this one
+    // onto the wrong attachment, and the card would start captioning them wrongly.
+    const turns = note.attachmentTurns ?? [];
+    this.store.update(noteId, {
+      attachments: paths.filter((_, i) => i !== at),
+      ...(turns.length === paths.length ? { attachmentTurns: turns.filter((_, i) => i !== at) } : {}),
+    });
     // Delete the file only if we own it and no other (e.g. archived) note references it.
     if (!fsPath.startsWith(this.dir.fsPath)) return;
     const stillReferenced =

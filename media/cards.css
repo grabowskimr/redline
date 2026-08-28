@@ -517,40 +517,86 @@ body {
   color: #d9b169;
 }
 
-/* Screenshots attached to a note. */
+/* ── screenshots ─────────────────────────────────────────────────────── */
+/*
+ * A row each, not a strip of thumbnails. After the fact you recognise a capture by its name,
+ * and which turn it belongs to is worth saying — one attached to a follow-up is evidence for
+ * that follow-up, not for the note.
+ */
 .shots {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 6px;
 }
 .shot {
-  position: relative;
-  display: inline-flex;
-}
-.shot img {
-  max-height: 72px;
-  border-radius: 6px;
-  border: 1px solid #2b2c30;
-  cursor: pointer;
-}
-.shot .x {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  background: #17181a;
-  border: 1px solid #3a3c41;
-  border-radius: 50%;
-  width: 16px;
-  height: 16px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: #8d8a86;
+  gap: 10px;
+  background: #17181a;
+  border: 1px solid #2b2c30;
+  border-radius: 7px;
+  padding: 7px 9px;
+}
+.shot img {
+  width: 46px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #2b2c30;
+  background: #212226;
   cursor: pointer;
-  font-size: 10px;
+  flex: 0 0 auto;
+}
+.shot .what {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.shot .name {
+  font-size: 12.5px;
+  color: #d6d3ce;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shot .cap {
+  font-family: var(--redline-mono);
+  font-size: 10.5px;
+  color: #6b6a67;
+}
+.shot .x {
+  background: transparent;
+  border: 0;
+  color: #6b6a67;
+  cursor: pointer;
+  padding: 2px;
+  flex: 0 0 auto;
+  display: inline-flex;
 }
 .shot .x:hover {
   color: #e08d8d;
+}
+
+/* The follow-up box takes one too, without leaving the box. */
+.ask .clip {
+  position: absolute;
+  right: 26px;
+  bottom: 6px;
+  background: transparent;
+  border: 0;
+  color: #6b6a67;
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+}
+.ask .clip:hover {
+  color: #c9c6c1;
+}
+.actions .plain .codicon {
+  margin-right: 5px;
+  vertical-align: -1px;
 }
 
 /* Folded away on a settled card until someone asks to read it back. */
