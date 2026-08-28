@@ -8,8 +8,8 @@
   const vscode = acquireVsCodeApi();
   const root = document.getElementById('root');
 
-  /** @type {{groups: any[], sent: any[], kinds: any[], session: any}} */
-  let state = { groups: [], sent: [], kinds: [], session: null };
+  /** @type {{cards: any[], sent: any[], kinds: any[], session: any}} */
+  let state = { cards: [], sent: [], kinds: [], session: null };
   let ready = false;
   let pendingRender = false;
   /** The card the user last interacted with — the fallback target for ⌘V. */
@@ -103,9 +103,7 @@
   }
 
   function findNote(id) {
-    for (const g of state.groups) {
-      for (const n of g.notes) if (n.id === id) return n;
-    }
+    for (const n of state.cards || []) if (n.id === id) return n;
     for (const n of state.sent) if (n.id === id) return n;
     return {};
   }
@@ -159,6 +157,11 @@
 
   const AGENT_PREFIX = 'Claude:';
 
+  /** A turn written by the agent rather than by you. Mirrors `isAgentTurn` in the model. */
+  function isAgentTurn(turn) {
+    return String(turn || '').startsWith(AGENT_PREFIX);
+  }
+
   /**
    * The small slice of markdown an agent actually writes in a sentence about its own work:
    * `[label](target)` and `` `code` ``.
@@ -188,178 +191,206 @@
     glyph +
     '</button>';
 
-  function card(n) {
-    // Settled: dealt with, and nothing left to read — collapsed, dimmed, and removable in one
-    // click rather than through the ⋯ menu. A reply that has not been sent makes it live
-    // again: the conversation is waiting on you, not on Claude. Declared first because the
-    // screenshot and action markup below both depend on it.
-    // A note waiting to be approved is deliberately *not* settled: the before and after are
-    // the thing being judged, and a settled card hides both.
-    const awaiting = awaitingApproval(n);
-    const settled = !!(n.done || (n.sent && n.sent.outcome)) && !n.pendingReply && !awaiting;
+  /**
+   * Which of the four things a card is.
+   *
+   *   drafting — written, not sent. Nothing has happened to it yet.
+   *   approve  — Claude changed something and nobody has agreed with it.
+   *   rejected — you turned that change down; another attempt is owed.
+   *   done     — settled, kept for the record.
+   *
+   * Anything else is waiting on Claude, which is the same card as drafting minus the button.
+   */
+  function cardState(n) {
+    if (n.done) return 'done';
+    if (n.rejected) return 'rejected';
+    if (awaitingApproval(n)) return 'approve';
+    if (!n.sent) return 'drafting';
+    return 'waiting';
+  }
 
-    const beforeAfter = n.after !== undefined && n.after !== null;
-    const codeLabel = n.missing
-      ? 'original code (the file is gone)'
-      : n.orphaned
-        ? 'original code (stale)'
-        : esc(n.where) + (n.language ? ' · ' + esc(n.language) : '');
-    const snippet = n.snippet
-      ? codeBox(
-          beforeAfter ? 'before' : '',
-          beforeAfter ? 'before (what you reviewed)' : codeLabel,
-          n.snippet,
-          'reveal',
-        )
-      : '';
-    const after = beforeAfter
-      ? codeBox('after', 'after (Claude&#8217;s change · ' + esc(n.where) + ')', n.after, 'reveal')
-      : '';
-    const sugg =
-      n.suggestion !== undefined && n.suggestion !== null
-        ? codeBox('suggestion', 'suggested change', n.suggestion, 'suggest')
-        : '';
-    const addenda = (n.addenda || [])
-      .map((a) => {
-        const raw = String(a);
-        const agent = raw.startsWith(AGENT_PREFIX);
-        const text = agent ? raw.slice(AGENT_PREFIX.length).trim() : raw;
-        return (
-          '<div class="addendum' +
-          (agent ? ' agent' : '') +
-          '">' +
-          (agent ? '<span class="who">Claude</span>' : '') +
-          inlineMarkdown(text) +
-          '</div>'
-        );
+  const STATE_WORD = {
+    drafting: 'Drafting',
+    waiting: 'Sent',
+    approve: 'Needs approval',
+    rejected: 'Rejected',
+    done: 'Done',
+  };
+
+  /** The lines the note was written about, with their real numbers beside them. */
+  function snippetBlock(n) {
+    if (!n.snippet) return '';
+    const lines = dedent(n.snippet).split('\n');
+    // A trailing blank from the selection is not a line of code.
+    while (lines.length > 1 && !lines[lines.length - 1].trim()) lines.pop();
+    const first = n.firstLine || 1;
+    const width = String(first + lines.length - 1).length;
+    const rows = lines
+      .map((line, i) => {
+        const num = String(first + i).padStart(width, ' ');
+        return '<span class="ln">' + esc(num) + '</span>' + esc(line);
       })
-      .join('');
-    const shots = (n.attachments || []).length
-      ? '<div class="shots">' +
-        n.attachments
-          .map(
-            (a) =>
-              '<span class="shot"><img src="' +
-              esc(a.src) +
-              '" alt="' +
-              esc(a.name) +
-              '" title="' +
-              esc(a.name) +
-              ' — click to open" data-shot="' +
-              esc(a.path) +
-              '">' +
-              // Removable exactly when attaching is offered. Keyed on `sent` alone, a
-              // screenshot added to a reply could never be taken off again.
-              (settled
-                ? ''
-                : '<span class="x" data-unshot="' + esc(a.path) + '" title="Remove screenshot">' +
-                  icon('close') +
-                  '</span>') +
-              '</span>',
-          )
-          .join('') +
-        '</div>'
-      : '';
-    // Your own decision outranks the agent's verdict: a note you marked done reads as done,
-    // whatever Claude reported about it.
-    const status = n.pendingReply
-      ? icon('edit') + ' follow-up not sent'
-      : n.done
-      ? icon('pass-filled') + ' approved'
-      : n.awaiting
-      ? '<span class="codicon codicon-loading codicon-modifier-spin"></span> waiting for Claude'
-      : n.sent
-      ? statusOf(n)
-      : n.orphaned
-      ? icon('warning') + ' stale'
-      : '';
+      .join('\n');
+    return '<pre class="snip" data-act="reveal" title="Open in the editor">' + rows + '</pre>';
+  }
+
+  /** Claude's turn: what it changed, or what it answered. */
+  function claudeBlock(n, dimmed) {
+    const said = latestAgentTurn(n);
+    if (!said) return '';
+    const label = n.sent && n.sent.outcome === 'answered' ? "Claude's answer" : "Claude's change";
     return (
-      '<div class="card' +
-      (n.done && !n.pendingReply ? ' done' : '') +
-      (settled ? ' settled' : '') +
-      (n.pendingReply ? ' pending' : '') +
-      (n.awaiting ? ' awaiting' : '') +
-      '" data-id="' +
-      esc(n.id) +
-      '" data-kind="' +
-      esc(n.kind) +
-      '" tabindex="0">' +
-      '<div class="head">' +
-      '<span class="seq">#' +
-      esc(n.seq) +
-      '</span>' +
-      '<span class="kind" data-act="kind" title="Change kind">' +
-      icon(n.kindIcon) +
-      ' ' +
-      esc(n.kindLabel) +
-      '</span>' +
-      // A note whose file has been deleted, or whose lines have moved out from under it:
-      // both were shown exactly like a healthy note, so opening one quietly did nothing.
-      (n.missing
-        ? '<span class="where gone" title="This file has been deleted — the note is kept for the record">' +
-          icon('trash') +
-          ' ' +
-          esc(n.where) +
-          '</span>'
-        : '<span class="where' +
-          (n.orphaned ? ' stale' : '') +
-          '" data-act="reveal" title="' +
-          (n.orphaned ? 'The code this note pointed at has moved; the line may be wrong' : 'Open in editor') +
-          '">' +
-          (n.orphaned ? icon('warning') + ' ' : '') +
-          esc(n.where) +
-          '</span>') +
-      '<span class="spacer"></span>' +
-      (status ? '<span class="status">' + status + '</span>' : '') +
-      '</div>' +
-      '<div class="body" data-act="reveal" title="Open in the editor — edit the note in the comment widget there">' +
-      esc(n.body) +
-      '</div>' +
-      // Addenda survive collapsing: an answered note keeps Claude's reply there, and
-      // hiding it would throw away the only thing the round produced.
-      addenda +
-      (settled ? '' : shots + snippet + after + sugg) +
-      '<div class="reply"><textarea placeholder="' +
-      'Follow-up… (⌘⏎ to save, then send it)' +
-      '"></textarea></div>' +
-      '<div class="actions">' +
-      // Reply is always available: it is how a conversation continues, whatever state the
-      // note is in. Attaching is available whenever something is still going to be sent,
-      // because a reply often needs a screenshot before it goes.
-      btn(
-        'reply',
-        icon('comment'),
-        n.sent ? 'Follow-up — continues this conversation with Claude' : 'Follow-up — added before this is sent',
-      ) +
-      (settled
-        ? btn('reopen', icon('history'), n.done ? 'Reopen this note' : 'Mark as not done')
-        : awaiting
-        ? // Two clicks instead of a sentence: the usual answers to "I changed it" are "good"
-          // and "not quite", and both used to need typing.
-          btn('approve', icon('thumbsup'), 'The change is good — close this note', 'go') +
-          btn('needswork', icon('thumbsdown'), 'Not right yet — reopen and say why')
-        : btn(
-            'attach',
-            icon('file-media'),
-            'Attach a screenshot: click to pick a file, paste with ⌘V, or hold ⇧ while dragging an image onto this card',
-          ) +
-          // Reflects the state it is in: offering "mark done" on a note that is already done
-          // means the click quietly undoes it, which reads as the button not working.
-          (n.done ? btn('reopen', icon('history'), 'Reopen this note') : btn('done', icon('check'), 'Mark done'))) +
-      (!n.sent || n.pendingReply
-        ? btn(
-            'send',
-            icon('send'),
-            n.pendingReply ? 'Send your reply to Claude Code' : 'Send this note to Claude Code',
-            'go',
-          )
-        : '') +
-      '<span class="spacer"></span>' +
-      (settled ? btn('remove', icon('trash'), 'Remove this note', 'danger') : '') +
-      btn('more', icon('kebab-vertical'), 'More actions…') +
-      '</div>' +
+      '<div class="block claude' + (dimmed ? ' dim' : '') + '">' +
+      '<span class="block-label">' + label + '</span>' +
+      '<div class="block-body">' + inlineMarkdown(said) + '</div>' +
       '</div>'
     );
+  }
+
+  /** The reason a change was turned down — your words, kept beside the answer they refuse. */
+  function rejectionBlock(n) {
+    const why = latestOwnTurn(n);
+    if (!why) return '';
+    return (
+      '<div class="block reject">' +
+      '<span class="block-label">You · rejected</span>' +
+      '<div class="block-body">' + inlineMarkdown(why) + '</div>' +
+      '</div>'
+    );
+  }
+
+  /** The newest thing Claude said in the thread. */
+  function latestAgentTurn(n) {
+    const turns = (n.addenda || []).filter(isAgentTurn);
+    const last = turns[turns.length - 1];
+    if (last) return String(last).replace(AGENT_PREFIX, '').trim();
+    return n.sent && n.sent.reply ? n.sent.reply : '';
+  }
+
+  /** The newest thing you said after Claude's last turn. */
+  function latestOwnTurn(n) {
+    const turns = n.addenda || [];
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (!isAgentTurn(turns[i])) return String(turns[i]).trim();
+    }
+    return '';
+  }
+
+  /** Screenshots attached to a note, removable while the note is still live. */
+  function shotsOf(n, settled) {
+    const shots = n.attachments || [];
+    if (shots.length === 0) return '';
+    return (
+      '<div class="shots">' +
+      shots
+        .map(
+          (a) =>
+            '<span class="shot"><img src="' +
+            esc(a.src) +
+            '" alt="' +
+            esc(a.name) +
+            '" title="' +
+            esc(a.name) +
+            ' — click to open" data-shot="' +
+            esc(a.path) +
+            '">' +
+            (settled
+              ? ''
+              : '<span class="x" data-unshot="' + esc(a.path) + '" title="Remove screenshot">' + icon('close') + '</span>') +
+            '</span>',
+        )
+        .join('') +
+      '</div>'
+    );
+  }
+
+  function card(n) {
+    const state = cardState(n);
+    const meta =
+      '<div class="meta">' +
+      '<span class="state ' + state + '">' + esc(STATE_WORD[state] || '') + '</span>' +
+      '<span class="ref' + (n.missing ? ' gone' : n.orphaned ? ' stale' : '') + '"' +
+      (n.missing
+        ? ' title="This file has been deleted — the note is kept for the record"'
+        : n.orphaned
+          ? ' title="The code this note pointed at has moved; the line may be wrong"'
+          : '') +
+      '>' +
+      '<span class="kind" data-act="kind" title="' + esc(n.kindLabel) + '" style="color:' + esc(n.kindColor) + '">' +
+      icon(n.kindIcon) +
+      '</span>' +
+      esc(n.fileRef) +
+      '<button class="more" data-act="more" title="More actions…">' + icon('kebab-vertical') + '</button>' +
+      '</span>' +
+      '</div>';
+
+    // Settled: the snippet and one line of what it was about, and nothing else. Clicking it
+    // opens the rest — the conversation is still there, it is just not worth the room.
+    if (state === 'done') {
+      // The whole thread is rendered and folded away rather than dropped: expanding it is a
+      // class, not a round trip, and what was said is still worth reading back.
+      return (
+        '<div class="card done" data-id="' + esc(n.id) + '" data-kind="' + esc(n.kind) + '" tabindex="0">' +
+        snippetBlock(n) +
+        '<div class="summary" data-act="expand">' +
+        '<span class="state done">Done</span>' +
+        '<span class="what">' + esc(firstLineOf(n.body)) + '</span>' +
+        '<span class="ref">' + esc(n.fileRef) + '</span>' +
+        '</div>' +
+        '<div class="folded">' +
+        '<div class="say" data-act="reveal" title="Open in the editor">' + esc(n.body) + '</div>' +
+        claudeBlock(n, false) +
+        '</div>' +
+        '</div>'
+      );
+    }
+
+    const followUp =
+      state === 'approve'
+        ? '<div class="block follow">' +
+          '<span class="block-label">You · follow-up</span>' +
+          '<div class="ask">' +
+          '<textarea rows="1" placeholder="Ask for a change or another attempt…"></textarea>' +
+          '<span class="hint">⏎</span>' +
+          '</div>' +
+          '</div>'
+        : '';
+
+    let actions = '';
+    if (state === 'drafting') {
+      actions = '<div class="actions"><button class="go wide" data-act="send">Send to Claude</button></div>';
+    } else if (state === 'approve') {
+      actions =
+        '<div class="actions">' +
+        '<button class="approve" data-act="approve">Approve</button>' +
+        '<button class="reject" data-act="needswork">Not this</button>' +
+        '<button class="plain" data-act="reply">Reply</button>' +
+        '</div>';
+    } else if (state === 'rejected') {
+      actions = '<div class="working"><span class="dot"></span>Claude is working on it…</div>';
+    } else if (n.pendingReply) {
+      actions = '<div class="actions"><button class="go wide" data-act="send">Send your reply</button></div>';
+    } else {
+      actions = '<div class="working"><span class="dot"></span>Waiting for Claude…</div>';
+    }
+
+    return (
+      '<div class="card ' + state + '" data-id="' + esc(n.id) + '" data-kind="' + esc(n.kind) + '" tabindex="0">' +
+      meta +
+      snippetBlock(n) +
+      '<div class="say" data-act="reveal" title="Open in the editor">' + esc(n.body) + '</div>' +
+      shotsOf(n, false) +
+      claudeBlock(n, state === 'rejected') +
+      (state === 'rejected' ? rejectionBlock(n) : '') +
+      followUp +
+      actions +
+      '</div>'
+    );
+  }
+
+  function firstLineOf(text) {
+    const line = String(text || '').split('\n').find((l) => l.trim()) || '';
+    return line.length > 90 ? line.slice(0, 89) + '…' : line;
   }
 
   /** What the session is doing right now, when the hook is reporting it. */
@@ -511,61 +542,26 @@
   function render() {
     if (!ready) return;
     let html = sessionStrip();
-    if (!state.groups.length && !state.sent.length) {
+    const all = (state.cards || []).concat(state.sent || []);
+    if (all.length === 0) {
       html +=
         '<div class="empty">No review notes yet.<br><br>Hover a line in the editor and click the ➕ in the gutter, or select lines and press ⌘⌥M / Ctrl+Alt+M.<br><br>Screenshots: paste with ⌘V onto a note, click 📎, or hold ⇧ while dragging the image onto a card.</div>';
       paint(html);
       return;
     }
-    var everyNote = [];
-    for (const g of state.groups) everyNote = everyNote.concat(g.notes);
-    everyNote = everyNote.concat(state.sent);
-    var counts = {};
-    for (var i = 0; i < everyNote.length; i++) {
-      var b = bucket(everyNote[i]);
+    const counts = {};
+    for (let i = 0; i < all.length; i++) {
+      const b = bucket(all[i]);
       counts[b] = (counts[b] || 0) + 1;
     }
     // A filter that hides everything is a dead end, so it gives way rather than showing a
     // blank panel — the chip stays lit so it is obvious what happened.
     if (filter !== 'all' && !(counts[filter] > 0)) filter = 'all';
-    html += filterBar(counts, everyNote.length);
+    html += filterBar(counts, all.length);
 
-    for (const g of state.groups) {
-      if (!g.notes.some(keep)) continue;
-      html +=
-        '<div class="file"><span class="base">' +
-        esc(g.base) +
-        '</span><span class="dir" title="' +
-        esc(g.path) +
-        '">' +
-        esc(g.dir) +
-        '</span><span class="count">' +
-        g.notes.length +
-        '</span></div>';
-      html += g.notes.filter(keep).map(card).join('');
-    }
-    if (state.sent.length) {
-      const addressed = state.sent.filter((n) => n.sent && (n.sent.outcome || n.sent.changed)).length;
-      html += '<h3>Sent to Claude — ' + addressed + '/' + state.sent.length + ' addressed</h3>';
-      // Follow-ups written since the last send. The toolbar's send button covers these too,
-      // but this is where they were written, and a second round is the normal way this gets
-      // used — reading the answers, replying to several, sending them together.
-      var waiting = state.sent.filter(function (n) { return n.pendingReply; }).length;
-      html +=
-        '<div class="sentbar">' +
-        (waiting
-          ? '<button class="primary" data-global="redline.submit" title="Send every follow-up you have written, in one message">' +
-            icon('send') +
-            ' send ' +
-            waiting +
-            ' follow-up' +
-            (waiting === 1 ? '' : 's') +
-            '</button>'
-          : '') +
-        '<button data-global="redline.clearSent" title="Archive these and clear the section">✓ clear sent</button>' +
-        '</div>';
-      html += state.sent.filter(keep).map(card).join('');
-    }
+    // One column, no file headers: the cards come from all over a change, so a header was
+    // mostly one card each, and every card names its own file.
+    html += '<div class="list">' + all.filter(keep).map(card).join('') + '</div>';
     paint(html);
   }
 
@@ -710,18 +706,21 @@
         cmd('redline.sendSelected', id);
         break;
 
-      case 'suggest':
-        cmd('redline.addSuggestion', id);
-        break;
       case 'attach':
         post({ type: 'attachPick', id });
         break;
       case 'reply': {
-        cardEl.classList.toggle('replying');
+        // The box is already on a card that needs approval; on any other, this reveals it.
+        cardEl.classList.add('replying');
         const ta = cardEl.querySelector('textarea');
-        if (ta) ta.focus();
+        if (ta && ta.focus) ta.focus();
         break;
       }
+      case 'expand':
+        // A settled card keeps what was said; it just does not spend the room on it until
+        // someone wants to read it back.
+        cardEl.classList.toggle('open');
+        break;
       case 'kind':
         openPopup(
           el,
@@ -741,18 +740,10 @@
       case 'more': {
         const n = findNote(id);
         const items = [];
-        if (!n.sent) {
-          items.push([
-            'suggest',
-            icon('diff-single'),
-            n.suggestion !== undefined && n.suggestion !== null
-              ? 'Edit suggested change'
-              : 'Add suggested change',
-          ]);
-          if (n.suggestion !== undefined && n.suggestion !== null) {
-            items.push(['apply', icon('play'), 'Apply suggestion to the file']);
-          }
-        }
+        // Everything that does not earn a place in the card's own row of actions.
+        items.push(['attach', icon('file-media'), 'Attach a screenshot']);
+        if (n && n.done) items.push(['reopen', icon('history'), 'Reopen this note']);
+        else if (n && n.sent) items.push(['done', icon('check'), 'Mark done without asking again']);
         items.push(['copy', icon('copy'), 'Copy this note']);
         items.push(['delete', icon('trash'), 'Delete note']);
         openPopup(
@@ -766,13 +757,19 @@
           (ev) => {
             const mi = ev.target.closest('[data-menu-act]');
             if (!mi) return;
+            const what = mi.dataset.menuAct;
+            // Two of these are panel-side, the rest are commands.
+            if (what === 'attach') {
+              post({ type: 'attachPick', id });
+              return;
+            }
             const map = {
-              suggest: 'redline.addSuggestion',
-              apply: 'redline.applySuggestion',
               copy: 'redline.copyNote',
               delete: 'redline.deleteNote',
+              done: 'redline.toggleDone',
+              reopen: 'redline.toggleDone',
             };
-            const command = map[mi.dataset.menuAct];
+            const command = map[what];
             if (command) cmd(command, id);
           },
         );
@@ -983,7 +980,7 @@
     const msg = e.data || {};
     if (msg.type === 'notes') {
       clearBusy();
-      state.groups = msg.groups || [];
+      state.cards = msg.cards || [];
       state.sent = msg.sent || [];
       state.kinds = msg.kinds || state.kinds;
       ready = true;

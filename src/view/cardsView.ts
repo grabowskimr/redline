@@ -39,6 +39,14 @@ interface CardData {
   kind: NoteKind;
   kindIcon: string;
   kindLabel: string;
+  /** The kind's colour, so ten of them stay apart at icon size. */
+  kindColor: string;
+  /** `SurveyList.tsx:10` — every card names its own file, since they come from many. */
+  fileRef: string;
+  /** First line the snippet starts at, for the gutter beside it. */
+  firstLine: number;
+  /** Turned down: waiting for another attempt rather than for a reader. */
+  rejected?: boolean;
   body: string;
   addenda: string[];
   suggestion?: string;
@@ -59,12 +67,6 @@ interface CardData {
   after?: string;
 }
 
-interface FileGroup {
-  path: string;
-  dir: string;
-  base: string;
-  notes: CardData[];
-}
 
 interface SessionInfo {
   label: string;
@@ -188,7 +190,7 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       if (!view.visible) return;
       void view.webview.postMessage({
         type: 'notes',
-        groups: this.groups(),
+        cards: this.cards(),
         sent: this.store.notes.filter((n) => n.sent).map((n) => this.card(n)),
         kinds: KINDS_BY_WEIGHT.map((k) => ({ kind: k, icon: KIND_META[k].themeIcon, label: KIND_META[k].label })),
       });
@@ -307,22 +309,15 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     return (await readStopMarker(root)) !== undefined;
   }
 
-  private groups(): FileGroup[] {
-    const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
-    const groups = new Map<string, FileGroup>();
-    for (const n of this.index.panelNotes()) {
-      const display = multiRoot && n.workspaceFolder ? `${n.workspaceFolder}/${n.path}` : n.path;
-      const slash = display.lastIndexOf('/');
-      const group: FileGroup = groups.get(display) ?? {
-        path: display,
-        dir: slash >= 0 ? display.slice(0, slash) : '',
-        base: slash >= 0 ? display.slice(slash + 1) : display,
-        notes: [],
-      };
-      group.notes.push(this.card(n));
-      groups.set(display, group);
-    }
-    return [...groups.values()];
+  /**
+   * The notes, in one list.
+   *
+   * Grouped by file until now, with a header above each group. The cards come from all over a
+   * change, so the headers were mostly one card each — a row of chrome per note — and every
+   * card names its own file anyway.
+   */
+  private cards(): CardData[] {
+    return this.index.panelNotes().map((n) => this.card(n));
   }
 
   private card(n: ReviewNote): CardData {
@@ -335,6 +330,12 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       // markdown prompt, where a font-based icon has nowhere to render.
       kindIcon: meta.themeIcon,
       kindLabel: meta.label,
+      kindColor: meta.color,
+      // Every card names its own file: they come from all over, and there is no group header
+      // above them to say which.
+      fileRef: `${n.path.split('/').pop() ?? n.path}:${n.range.startLine + 1}`,
+      firstLine: n.range.startLine + 1,
+      ...(n.rejected ? { rejected: true } : {}),
       body: n.body,
       addenda: n.addenda,
       snippet: n.anchor.snippet,

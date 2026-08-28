@@ -406,7 +406,9 @@ export function batchCommands(deps: Deps) {
       if (n.sent.outcome === it.outcome && (n.sent.reply ?? undefined) === it.text) continue;
       const next: NonNullable<ReviewNote['sent']> = { ...n.sent, outcome: it.outcome };
       if (it.text) next.reply = it.text;
-      const patch: Partial<ReviewNote> = { sent: next };
+      // A fresh answer ends the rejection: this is the next attempt, and it is waiting on a
+      // reader again rather than on Claude.
+      const patch: Partial<ReviewNote> = { sent: next, rejected: undefined };
       // Whatever it said goes into the conversation, whether it answered a question, made a
       // change, or declined one. A bare "done" beside changed code leaves nothing to read,
       // and the note is now a thread that stays on the line.

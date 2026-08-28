@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.5.0 — 2026-08-28
+
+**The cards are redesigned.** One column, no file headers — the cards come from all over a
+change, so a header was usually one card each. Every card names its own file and line instead,
+in mono, never truncated.
+
+A card reads top to bottom: what state it is in and where it is · the lines it was written
+about, numbered from where they actually are · what you asked for · what Claude said, under a
+dashed rule · a box for the next thing you want · the answer, in one row of buttons.
+
+Four states, each with its own edge colour and its own set of actions:
+
+- **Drafting** — nothing has happened yet. One button: *Send to Claude*.
+- **Needs approval** — Claude changed something and nobody has agreed with it. Its words, a box
+  to ask for another attempt, and *Approve* · *Not this* · *Reply*.
+- **Rejected** — you turned that change down. Its answer stays, dimmed, with your reason
+  beneath it and *Claude is working on it…* where the buttons were.
+- **Done** — the snippet and one line about it. The exchange is folded away, not dropped:
+  clicking opens it.
+
+Kinds are shown as their own coloured codicon, no label and no emoji — ten of them are told
+apart by colour long before anyone reads a word, and the name is in the tooltip.
+
+Rejecting is now recorded rather than inferred. "There is a follow-up after its answer" is also
+what asking a further question looks like, and the two want different cards.
+
+Delete, copy, attach and reopen moved into the card's overflow: three buttons is the tightest
+row that fits a 420px panel, and a fourth would wrap — a wrapped verb stops reading as a button.
+
 ## 1.4.0 — 2026-08-28
 
 - **Sessions come from Claude Code itself.** `claude agents --json` lists every session with its

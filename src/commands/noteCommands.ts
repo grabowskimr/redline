@@ -304,7 +304,7 @@ export function noteCommands(deps: Deps) {
       void vscode.window.showInformationMessage('Redline: select a note first.');
       return;
     }
-    store.update(note.id, { done: true });
+    store.update(note.id, { done: true, rejected: undefined });
     void vscode.window.setStatusBarMessage(`Redline: #${note.seq} approved`, 4000);
   }
 
@@ -316,7 +316,10 @@ export function noteCommands(deps: Deps) {
       void vscode.window.showInformationMessage('Redline: select a note first.');
       return;
     }
-    store.update(note.id, { done: false });
+    // Recorded, not inferred: "there is a follow-up after its answer" is also what asking a
+    // further question looks like, and the card shows the two differently — one is waiting on
+    // another attempt, the other is a conversation.
+    store.update(note.id, { done: false, rejected: true });
     await followUpHere(note.id);
   }
 

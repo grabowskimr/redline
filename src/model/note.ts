@@ -23,6 +23,13 @@ export function isNoteKind(value: unknown): value is NoteKind {
 }
 
 export interface KindMeta {
+  /**
+   * The kind's own colour, used for its icon on a card.
+   *
+   * Fixed rather than themed: a kind is recognised by its colour before its shape at 13px, and
+   * ten of them have to stay apart from each other, which a theme's palette does not promise.
+   */
+  color: string;
   /** Emoji used in markdown output and the inline badge. */
   icon: string;
   /** Codicon id used for ThemeIcon. */
@@ -36,16 +43,16 @@ export interface KindMeta {
 }
 
 export const KIND_META: Record<NoteKind, KindMeta> = {
-  comment: { icon: '💬', themeIcon: 'request-changes', weight: 1, label: 'change request', description: 'Change this the way I describe' },
-  bug: { icon: '🐞', themeIcon: 'bug', weight: 2, label: 'bug', description: 'Something is wrong — fix it' },
-  security: { icon: '🔒', themeIcon: 'shield', weight: 3, label: 'security', description: 'Vulnerability or unsafe handling of data' },
-  perf: { icon: '⚡', themeIcon: 'dashboard', weight: 4, label: 'perf', description: 'Too slow, too much work, too much memory' },
-  idea: { icon: '💡', themeIcon: 'lightbulb', weight: 5, label: 'idea', description: 'Improve / extend this — build on what is here' },
-  refactor: { icon: '🔧', themeIcon: 'wrench', weight: 6, label: 'refactor', description: 'Same behaviour, better structure' },
-  question: { icon: '💭', themeIcon: 'question', weight: 7, label: 'question', description: 'Explain this to me before changing anything' },
-  todo: { icon: '📌', themeIcon: 'checklist', weight: 8, label: 'todo', description: 'Follow-up work, can be done later' },
-  nit: { icon: '✂️', themeIcon: 'edit', weight: 9, label: 'nit', description: 'Tiny thing: naming, formatting, style' },
-  praise: { icon: '✨', themeIcon: 'heart', weight: 10, label: 'praise', description: 'This is good — keep it (no action)' },
+  comment: { icon: '💬', themeIcon: 'request-changes', color: '#e0894a', weight: 1, label: 'change request', description: 'Change this the way I describe' },
+  bug: { icon: '🐞', themeIcon: 'bug', color: '#e08d8d', weight: 2, label: 'bug', description: 'Something is wrong — fix it' },
+  security: { icon: '🔒', themeIcon: 'shield', color: '#d9b169', weight: 3, label: 'security', description: 'Vulnerability or unsafe handling of data' },
+  perf: { icon: '⚡', themeIcon: 'dashboard', color: '#d9c46a', weight: 4, label: 'perf', description: 'Too slow, too much work, too much memory' },
+  idea: { icon: '💡', themeIcon: 'lightbulb', color: '#a8c97f', weight: 5, label: 'idea', description: 'Improve / extend this — build on what is here' },
+  refactor: { icon: '🔧', themeIcon: 'wrench', color: '#7fc4b8', weight: 6, label: 'refactor', description: 'Same behaviour, better structure' },
+  question: { icon: '💭', themeIcon: 'question', color: '#8ab4d8', weight: 7, label: 'question', description: 'Explain this to me before changing anything' },
+  todo: { icon: '📌', themeIcon: 'checklist', color: '#a99bd6', weight: 8, label: 'todo', description: 'Follow-up work, can be done later' },
+  nit: { icon: '✂️', themeIcon: 'edit', color: '#9a9793', weight: 9, label: 'nit', description: 'Tiny thing: naming, formatting, style' },
+  praise: { icon: '✨', themeIcon: 'heart', color: '#d89ab4', weight: 10, label: 'praise', description: 'This is good — keep it (no action)' },
 };
 
 /** Kinds ordered by output weight. */
@@ -102,6 +109,14 @@ export interface ReviewNote {
   suggestion?: string;
   /** Absolute paths of attached images (screenshots), stored in extension storage. */
   attachments?: string[];
+  /**
+   * Set when the change Claude made was turned down.
+   *
+   * Not derivable: "there is a follow-up after its answer" is also what asking a further
+   * question looks like, and the two want different things on the card — one is waiting for
+   * another attempt, the other is a conversation.
+   */
+  rejected?: boolean;
   done: boolean;
   /** For manual reordering. */
   order: number;

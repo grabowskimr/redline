@@ -1,4 +1,6 @@
 :root {
+  /* Code, file references, status words and section labels. */
+  --redline-mono: 'JetBrains Mono', var(--vscode-editor-font-family), ui-monospace, monospace;
   --accent: #d97757;
   --hair: var(--vscode-widget-border, var(--vscode-panel-border));
 }
@@ -14,6 +16,7 @@
  * scrollbar on a panel holding a single card. Letting the content decide the height means the
  * only scrollbar is the one that is actually needed. */
 body {
+  background: #1e1f22;
   margin: 0;
   padding: 0 10px 18px;
   /* Long unbreakable text belongs to the block that holds it, never to the panel. */
@@ -109,516 +112,307 @@ body {
   background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
 }
 
-/* ── file group header ───────────────────────────────────────────────── */
-
-.file {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--vscode-sideBar-background);
-  margin: 12px 0 6px;
-  padding: 5px 2px 4px;
-  border-bottom: 1px solid var(--hair);
-}
-.file .base {
-  font-weight: 600;
-  font-size: 0.95em;
-}
-.file .dir {
-  opacity: 0.5;
-  font-size: 0.82em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  /* Truncate the start of a long path: the end says which folder you are actually in. */
-  direction: rtl;
-  text-align: left;
-  unicode-bidi: plaintext;
-  min-width: 0;
-  flex: 0 1 auto;
-}
-.file .base {
-  flex: 0 0 auto;
-}
-.file .count {
-  margin-left: auto;
-  opacity: 0.55;
-  font-size: 0.82em;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Codicons: the panel ships the same icon font the editor widget uses. */
-.codicon {
-  font-size: 13px;
-  line-height: 1;
-  vertical-align: -2px;
-  color: var(--kind-c, inherit);
-}
-.menu .codicon {
-  color: inherit;
-}
-
 /* ── card ────────────────────────────────────────────────────────────── */
+/*
+ * One column of cards, each naming its own file. They come from all over a change, so
+ * grouping them under file headers spent a row of chrome on what was usually a single card.
+ */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 0 4px;
+}
 
 .card {
-  position: relative;
-  border: 1px solid var(--hair);
-  border-left: 3px solid var(--kind-c, var(--accent));
-  border-radius: 8px;
-  background: var(--vscode-editorWidget-background);
-  margin-bottom: 10px;
-  overflow: hidden;
+  background: #212226;
+  border: 1px solid #34363b;
+  border-radius: 10px;
+  padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .card:focus-within {
-  border-color: var(--vscode-focusBorder);
-  border-left-color: var(--kind-c, var(--accent));
+  border-color: #4a4d54;
+  outline: none;
 }
-/* Done, and still worth reading: Claude's account of what it changed lives here, so the card
-   is marked rather than faded. A green spine says "settled" without costing legibility. */
+/* The state colours the edge, so the queue reads down the left of the panel. */
+.card.approve {
+  border-color: rgba(224, 137, 74, 0.45);
+}
+.card.rejected {
+  border-color: rgba(224, 141, 141, 0.4);
+}
 .card.done {
-  border-left-color: var(--vscode-charts-green);
-}
-.card.done .head .status {
-  color: var(--vscode-charts-green);
-  opacity: 1;
-}
-.card[data-kind='bug'],
-.card[data-kind='security'] {
-  --kind-c: var(--vscode-charts-red);
-}
-.card[data-kind='question'] {
-  --kind-c: var(--vscode-charts-blue);
-}
-.card[data-kind='idea'] {
-  --kind-c: var(--vscode-charts-yellow);
-}
-.card[data-kind='praise'] {
-  --kind-c: var(--vscode-charts-green);
-}
-.card[data-kind='perf'] {
-  --kind-c: var(--vscode-charts-orange);
-}
-.card[data-kind='nit'],
-.card[data-kind='todo'],
-.card[data-kind='refactor'] {
-  --kind-c: var(--vscode-charts-purple);
+  background: #1c1d20;
+  border-color: #2b2c30;
+  gap: 8px;
 }
 
-.head {
+/* ── the row that says what and where ─────────────────────────────────── */
+/*
+ * Wraps as a unit. The file reference is the one thing that must never be clipped: a note
+ * about `QuestionCard.styles.ts:12` is meaningless as `QuestionCard.sty…`.
+ */
+.meta {
   display: flex;
-  align-items: center;
-  gap: 7px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
   flex-wrap: wrap;
-  padding: 7px 10px 0;
-  font-size: 11px;
-  line-height: 16px;
 }
-.head .seq {
-  font-family: var(--vscode-editor-font-family);
-  opacity: 0.55;
-  font-variant-numeric: tabular-nums;
+.state {
+  font-family: var(--redline-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #c9c6c1;
+  flex: 0 0 auto;
 }
-.head .kind {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  padding: 0 7px;
-  border-radius: 999px;
-  border: 1px solid var(--hair);
-  color: var(--kind-c, var(--vscode-foreground));
-  background: transparent;
+.state.approve {
+  color: #e0894a;
 }
-.head .kind:hover {
-  border-color: var(--kind-c, var(--vscode-focusBorder));
+.state.rejected {
+  color: #e08d8d;
 }
-.head .where {
-  cursor: pointer;
-  font-family: var(--vscode-editor-font-family);
-  opacity: 0.65;
+.state.done {
+  color: #7fbf87;
 }
-.head .where:hover {
-  opacity: 1;
-  text-decoration: underline;
+.state.waiting {
+  color: #8d8a86;
 }
-.head .spacer {
-  flex: 1;
-}
-.head .status {
-  opacity: 0.8;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.head .status .codicon {
-  font-size: 12px;
-  vertical-align: 0;
-}
-/* Footer buttons hold an icon now, not a character: centre it properly. */
-.actions button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.sentbar button {
+.meta .ref {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  font-family: var(--redline-mono);
+  font-size: 11px;
+  color: #8d8a86;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
-
-.body {
-  padding: 5px 10px 2px;
-  font-size: calc(var(--vscode-font-size) + 1px);
-  line-height: 1.5;
-  white-space: pre-wrap;
+/* Icon only: ten kinds are told apart by colour long before anyone reads a word. */
+.meta .kind {
   cursor: pointer;
-  border-radius: 4px;
-}
-.card:hover .body {
-  text-decoration-color: color-mix(in srgb, var(--vscode-foreground) 30%, transparent);
-}
-
-.addendum {
-  padding: 1px 10px 3px 24px;
-  white-space: pre-wrap;
-  /* A repository path has no spaces to break at, so without this it pushes the card sideways. */
-  overflow-wrap: anywhere;
-  opacity: 0.85;
-  position: relative;
-  line-height: 1.5;
-}
-/* Who is speaking, as a label rather than a "Claude:" buried in the sentence. */
-.addendum .who {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 5px;
-  border-radius: 3px;
-  font-size: 0.82em;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  vertical-align: 1px;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent);
-}
-/* A file reference: reads as its label, opens on click, full path in the tooltip. */
-.addendum .ref {
-  color: var(--vscode-textLink-foreground);
-  cursor: pointer;
-  text-decoration: none;
-  border-bottom: 1px dotted currentColor;
-}
-.addendum .ref:hover {
-  color: var(--vscode-textLink-activeForeground);
-  border-bottom-style: solid;
-}
-.addendum code {
-  font-family: var(--vscode-editor-font-family);
-  font-size: 0.92em;
-  padding: 0 3px;
-  border-radius: 3px;
-  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.18));
-}
-.addendum::before {
-  content: '↳';
-  position: absolute;
-  left: 11px;
-  opacity: 0.5;
-}
-.addendum.agent {
-  opacity: 1;
-}
-
-/* screenshots */
-.shots {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 5px 10px 2px;
-}
-.shot {
-  position: relative;
-}
-.shot img {
-  height: 56px;
-  max-width: 140px;
-  object-fit: cover;
-  border-radius: 5px;
-  border: 1px solid var(--hair);
-  display: block;
-  cursor: zoom-in;
-}
-.shot img:hover {
-  border-color: var(--accent);
-}
-.shot .x {
-  display: none;
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
-  font-size: 10px;
-  cursor: pointer;
-  display: none;
-}
-.shot:hover .x {
   display: inline-flex;
 }
-.shot .x .codicon {
-  font-size: 10px;
-  vertical-align: 0;
+.meta .kind .codicon {
+  font-size: 13px;
 }
 
-/* code strips */
-pre {
-  margin: 7px 10px;
-  padding: 0;
-  border-radius: 6px;
-  background: var(--vscode-editor-background);
-  border: 1px solid var(--hair);
-  font-family: var(--vscode-editor-font-family);
-  font-size: calc(var(--vscode-editor-font-size) * 0.9);
-  line-height: 1.45;
-  overflow: hidden;
-  cursor: pointer;
-}
-pre .label {
-  display: block;
-  font-family: var(--vscode-font-family);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.55;
-  padding: 3px 9px 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-pre .code {
-  display: block;
-  padding: 2px 9px 6px;
+/* ── the lines the note was written about ─────────────────────────────── */
+.snip {
+  margin: 0;
+  background: #17181a;
+  border: 1px solid #2b2c30;
+  border-radius: 7px;
+  padding: 9px 11px;
+  font-family: var(--redline-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c9c6c1;
   overflow-x: auto;
   white-space: pre;
-  max-height: 8.8em;
-  color: var(--vscode-editor-foreground);
+  cursor: pointer;
 }
-pre.before .code {
-  opacity: 0.6;
-}
-pre.after {
-  border-left: 2px solid var(--vscode-charts-blue);
-}
-pre.suggestion {
-  border-left: 2px solid var(--vscode-charts-green);
+.snip .ln {
+  color: #6b6a67;
+  margin-right: 12px;
+  user-select: none;
 }
 
-/* follow-up input */
-.reply {
-  display: none;
-  padding: 4px 10px 8px;
+/* ── what you asked for ───────────────────────────────────────────────── */
+.say {
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: #e6e4e1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
 }
-.card.replying .reply {
+
+/* ── a turn in the conversation ───────────────────────────────────────── */
+/*
+ * The dashed rule is the only separator on the card. It says "someone else is speaking now"
+ * without a heading, a box or a colour block, at a width where all three would crowd.
+ */
+.block {
+  border-top: 1px dashed #34363b;
+  padding-top: 10px;
+}
+.block-label {
   display: block;
-}
-textarea {
-  width: 100%;
-  min-height: 3em;
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
-  border: 1px solid var(--vscode-input-border, var(--hair));
-  border-radius: 4px;
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
-  padding: 5px 7px;
-  resize: vertical;
-}
-textarea:focus {
-  outline: 1px solid var(--vscode-focusBorder);
-  outline-offset: -1px;
-}
-
-/* footer actions — always visible, never clipped */
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  margin-top: 5px;
-  padding: 3px 6px;
-  border-top: 1px solid var(--hair);
-  background: var(--vscode-sideBarSectionHeader-background, var(--vscode-editorWidget-background));
-}
-.actions button {
-  background: transparent;
-  border: 0;
-  color: var(--vscode-foreground);
-  opacity: 0.6;
-  cursor: pointer;
-  width: 26px;
-  height: 22px;
-  line-height: 20px;
-  padding: 0;
-  border-radius: 4px;
-  font-size: 0.95em;
-  text-align: center;
-  flex-shrink: 0;
-}
-.actions button:hover {
-  background: var(--vscode-toolbar-hoverBackground);
-  opacity: 1;
-}
-.actions button:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder);
-  opacity: 1;
-}
-.actions .spacer {
-  flex: 1;
-}
-
-/* popup menu */
-.menu {
-  position: absolute;
-  background: var(--vscode-menu-background);
-  color: var(--vscode-menu-foreground);
-  border: 1px solid var(--vscode-menu-border, var(--hair));
-  border-radius: 6px;
-  padding: 4px 0;
-  z-index: 10;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-  min-width: 170px;
-}
-.menu div {
-  padding: 4px 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.menu div:hover {
-  background: var(--vscode-menu-selectionBackground);
-  color: var(--vscode-menu-selectionForeground);
-}
-.menu .mi {
-  width: 16px;
-  text-align: center;
-  opacity: 0.85;
-}
-
-/* sent section */
-h3 {
-  font-size: 10px;
-  text-transform: uppercase;
+  font-family: var(--redline-mono);
+  font-size: 10.5px;
+  font-weight: 500;
   letter-spacing: 0.09em;
-  opacity: 0.55;
-  margin: 20px 0 6px;
+  text-transform: uppercase;
+  margin-bottom: 5px;
 }
-.sentbar {
+.block.claude .block-label {
+  color: #e0894a;
+}
+.block.reject .block-label {
+  color: #e08d8d;
+}
+.block.follow .block-label {
+  color: #c9c6c1;
+}
+.block-body {
+  font-size: 14px;
+  line-height: 1.55;
+  color: #d6d3ce;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.block-body code {
+  font-family: var(--redline-mono);
+  font-size: 12.5px;
+  color: #e0894a;
+  background: none;
+  padding: 0;
+}
+/* An answer that has been turned down is still worth reading, but it is not the live thing. */
+.block.claude.dim .block-body {
+  color: #a3a09c;
+}
+
+/* ── asking for another attempt ───────────────────────────────────────── */
+.ask {
+  position: relative;
   display: flex;
-  gap: 6px;
-  align-items: center;
-  margin: 0 0 8px;
-  flex-wrap: wrap;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .session.working .dot {
-    animation: none;
-  }
+.ask textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  background: #17181a;
+  border: 1px solid #3a3c41;
+  border-radius: 8px;
+  padding: 9px 28px 9px 11px;
+  color: #e6e4e1;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  line-height: 1.4;
 }
-
-/* drop target — only the card changes, nothing else on the panel */
-.card.dropping {
-  border-color: var(--accent);
-  border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--vscode-editorWidget-background));
-  box-shadow: inset 0 0 0 1px var(--accent);
+.ask textarea::placeholder {
+  color: #6b6a67;
 }
-
-/* busy — the clicked action spins until fresh state arrives */
-.actions button.busy,
-.session button.busy {
-  opacity: 1;
-  background: var(--vscode-toolbar-hoverBackground);
+.ask textarea:focus {
+  outline: none;
+  border-color: #4a4d54;
 }
-.actions.working button:not(.busy),
-.session .controls.working button:not(.busy) {
-  opacity: 0.35;
+.ask .hint {
+  position: absolute;
+  right: 9px;
+  bottom: 7px;
+  font-family: var(--redline-mono);
+  font-size: 11px;
+  color: #56585d;
   pointer-events: none;
 }
-.codicon-modifier-spin {
-  animation: codicon-spin 1.2s steps(12) infinite;
+
+/* ── the answer, in one click ─────────────────────────────────────────── */
+/*
+ * Never wraps. Three buttons at 420px is the tightest row on the card, and a verb that breaks
+ * across two lines stops reading as a button.
+ */
+.actions {
+  display: flex;
+  gap: 8px;
 }
-@keyframes codicon-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.actions button {
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  line-height: 1.2;
+  padding: 8px 13px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
-@media (prefers-reduced-motion: reduce) {
-  .codicon-modifier-spin {
-    animation-duration: 3s;
+.actions .wide {
+  flex: 1 1 auto;
+}
+.actions .go {
+  background: #e0894a;
+  color: #17181a;
+  font-weight: 500;
+}
+.actions .approve {
+  background: #7fbf87;
+  color: #0f1a12;
+  font-weight: 500;
+  flex: 1 1 auto;
+}
+.actions .reject {
+  background: transparent;
+  border-color: rgba(224, 141, 141, 0.4);
+  color: #e08d8d;
+}
+.actions .plain {
+  background: transparent;
+  border-color: #3a3c41;
+  color: #c9c6c1;
+}
+.actions button:hover {
+  filter: brightness(1.08);
+}
+
+/* ── waiting on Claude ────────────────────────────────────────────────── */
+.working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #17181a;
+  border: 1px solid #2b2c30;
+  border-radius: 7px;
+  padding: 8px 11px;
+  font-size: 12.5px;
+  color: #8d8a86;
+}
+.working .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e0894a;
+  flex: 0 0 auto;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
   }
 }
 
-/* settled — done or reported on by Claude. Nothing left to read, so collapse it. */
-.card.settled .body {
-  padding-bottom: 4px;
-  font-size: var(--vscode-font-size);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+/* ── settled ──────────────────────────────────────────────────────────── */
+/*
+ * The snippet and one line about it. What was said is still there; it is just not worth the
+ * room once nobody is going to act on it.
+ */
+.card.done .summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+}
+.card.done .summary .what {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: #8d8a86;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.card.settled .head {
-  padding-top: 5px;
-}
-.card.settled .actions {
-  margin-top: 2px;
-  padding: 1px 6px;
-}
-.card.settled {
-  margin-bottom: 6px;
-}
-.actions button.danger:hover {
-  background: var(--vscode-inputValidation-errorBackground, var(--vscode-toolbar-hoverBackground));
-  color: var(--vscode-errorForeground, var(--vscode-foreground));
-}
-
-/* something is waiting to be sent */
-.card.pending {
-  border-left-color: var(--accent);
-}
-.actions button.go {
-  color: var(--accent);
-  opacity: 1;
-}
-.actions button.go:hover {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-/* sent, and the agent has not answered yet */
-.card.awaiting {
-  border-left-color: var(--vscode-charts-blue);
-}
-.card.awaiting .status {
-  color: var(--vscode-charts-blue);
-  opacity: 1;
-}
-
-/* The follow-up send sits beside "clear sent", and is the action of the two that matters. */
-.sentbar .primary {
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
-}
-.sentbar .primary:hover {
-  background: var(--vscode-button-hoverBackground);
+.card.done .summary .ref {
+  font-family: var(--redline-mono);
+  font-size: 11px;
+  color: #56585d;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 /* ── state filter ────────────────────────────────────────────────────── */
@@ -701,4 +495,73 @@ h3 {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* The overflow: everything that does not earn a place in the card's row of actions. */
+.meta .more {
+  background: transparent;
+  border: 0;
+  color: #56585d;
+  cursor: pointer;
+  padding: 0 0 0 2px;
+  display: inline-flex;
+}
+.meta .more:hover {
+  color: #c9c6c1;
+}
+.meta .ref.gone {
+  color: #e08d8d;
+  text-decoration: line-through;
+}
+.meta .ref.stale {
+  color: #d9b169;
+}
+
+/* Screenshots attached to a note. */
+.shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.shot {
+  position: relative;
+  display: inline-flex;
+}
+.shot img {
+  max-height: 72px;
+  border-radius: 6px;
+  border: 1px solid #2b2c30;
+  cursor: pointer;
+}
+.shot .x {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background: #17181a;
+  border: 1px solid #3a3c41;
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8d8a86;
+  cursor: pointer;
+  font-size: 10px;
+}
+.shot .x:hover {
+  color: #e08d8d;
+}
+
+/* Folded away on a settled card until someone asks to read it back. */
+.card.done .folded {
+  display: none;
+}
+.card.done.open .folded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.card.done.open .summary .what {
+  color: #c9c6c1;
 }

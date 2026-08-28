@@ -233,7 +233,7 @@ describe('panel drag & drop', () => {
   it('defers a re-render until the drag is over, then applies it', async () => {
     const h = harness();
     h.fire('dragover', dragEvent(h.card('n1'), dt()));
-    h.fire('message', { data: { type: 'notes', groups: [], sent: [] } });
+    h.fire('message', { data: { type: 'notes', cards: [], sent: [] } });
     assert.equal(h.root.innerHTML, '', 'the DOM is not swapped out from under a live drag');
     await h.tick(900); // TTL expires, drag considered over
     assert.match(h.root.innerHTML, /No review notes yet/, 'the held-back render happens after');
@@ -374,18 +374,14 @@ describe('panel busy feedback', () => {
   });
 });
 
-describe('rendering a card', () => {
-  /**
-   * Drives the real `card()` through the DOM shim. Nothing else did: the drag and busy tests
-   * only fire events, so a card that threw on render — a `const` read before its declaration,
-   * say — went unnoticed until the panel was opened by hand.
-   */
+describe('a card', () => {
+  /** Drives the real `card()` through the DOM shim, one card at a time. */
   const render = (note: Record<string, unknown>): string => {
     const h = harness();
     h.fire('message', {
       data: {
         type: 'notes',
-        groups: [{ base: 'a.ts', dir: 'src', notes: [{ kind: 'comment', kindIcon: 'comment', where: 'L1', ...note }] }],
+        cards: [{ kind: 'comment', kindIcon: 'comment', kindLabel: 'change request', kindColor: '#e0894a', fileRef: 'a.ts:1', firstLine: 1, ...note }],
         sent: [],
         kinds: [],
       },
@@ -393,77 +389,139 @@ describe('rendering a card', () => {
     return h.root.innerHTML;
   };
 
-  const shot = [{ src: 'vscode://x/a.png', path: '/tmp/a.png', name: 'a.png' }];
-
-  it('renders at all', () => {
-    const html = render({ id: 'n1', seq: 1, body: 'rename this' });
-    assert.match(html, /class="card/);
-    assert.match(html, /rename this/);
+  const answered = (text: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'n1',
+    seq: 1,
+    body: 'remove this comment',
+    snippet: '// test comment',
+    addenda: [`Claude: ${text}`],
+    sent: { changed: true, outcome: 'done' },
+    ...over,
   });
 
-  it('offers to remove a screenshot on a note that has not been sent', () => {
-    assert.match(render({ id: 'n1', seq: 1, body: 'x', attachments: shot }), /data-unshot/);
+  it('names its own file, since the cards come from all over', () => {
+    // There is no group header above them any more: one header per card was a row of chrome
+    // for nothing.
+    const html = render({ id: 'n1', seq: 1, body: 'x', fileRef: 'SurveyList.tsx:10' });
+    assert.match(html, /SurveyList\.tsx:10/);
+    assert.doesNotMatch(html, /class="file"/, 'no group header');
   });
 
-  it('offers to remove one added to a reply on a note already sent', () => {
-    // The reported bug: keyed on `sent` alone, an image attached to a reply was stuck there.
-    const html = render({
-      id: 'n1', seq: 1, body: 'x', attachments: shot,
-      sent: { changed: false, outcome: 'done' }, pendingReply: true,
-    });
-    assert.match(html, /data-unshot/, 'removable while the reply is still unsent');
+  it('shows the lines it was written about, numbered from where they are', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'x', snippet: 'const a = 1;\nconst b = 2;', firstLine: 10 });
+    assert.match(html, /class="snip"/);
+    assert.match(html, /class="ln">10<\/span>const a = 1;/);
+    assert.match(html, /class="ln">11<\/span>const b = 2;/);
   });
 
-  it('does not offer removal once the note is settled', () => {
-    const html = render({
-      id: 'n1', seq: 1, body: 'x', attachments: shot, done: true,
-      sent: { changed: false, outcome: 'done' },
-    });
-    assert.doesNotMatch(html, /data-unshot/);
+  it('says Drafting and offers one button before it has been sent', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'x' });
+    assert.match(html, /class="state drafting">DRAFTING|>Drafting</);
+    assert.match(html, /data-act="send"[^>]*>Send to Claude</);
+    assert.doesNotMatch(html, /data-act="approve"/);
   });
 
-  it('reads as done and collapses once marked done', () => {
-    // pendingReply is cleared by the command when done is set, so the card settles.
-    const html = render({
-      id: 'n1', seq: 1, body: 'x', done: true,
-      sent: { changed: true, outcome: 'answered' }, attachments: [],
-    });
-    // "approved" now: your decision is the one that closes a note, and the word says whose it
-    // was. The agent's own verdict reads as "waiting for approval" until you agree.
-    assert.match(html, /codicon-pass-filled[^>]*><\/span> approved/, "your decision, not the agent's verdict");
-    assert.match(html, /class="card done settled/, 'dimmed and collapsed');
-    assert.match(html, /data-act="remove"/, 'and removable in one click');
+  it('says Needs approval and offers the three answers once Claude has changed something', () => {
+    const html = render(answered('Removed the trailing comment.'));
+    assert.match(html, />Needs approval</);
+    assert.match(html, /Claude&#39;s change|Claude's change/);
+    assert.match(html, /Removed the trailing comment\./);
+    assert.match(html, /data-act="approve"[^>]*>Approve</);
+    assert.match(html, /data-act="needswork"[^>]*>Not this</);
+    assert.match(html, /data-act="reply"[^>]*>Reply</);
+    assert.match(html, /Ask for a change or another attempt/, 'and a box to write the next one in');
   });
 
-  it('offers reopen, not mark-done, on a note already done', () => {
-    // Offering ✓ there means the click undoes it — which reads as the button doing nothing.
-    const html = render({
-      id: 'n1', seq: 1, body: 'x', done: true,
-      sent: { changed: false, outcome: 'done' }, pendingReply: true,
-    });
-    assert.match(html, /data-act="reopen"/);
-    assert.doesNotMatch(html, /data-act="done"/);
+  it('calls it an answer, not a change, when nothing was changed', () => {
+    const html = render(answered('Skipped — the note reads only "test".', { sent: { changed: false, outcome: 'answered' } }));
+    assert.match(html, /Claude&#39;s answer|Claude's answer/);
   });
 
-  it('shows the waiting state, and a send action for an unsent follow-up', () => {
-    assert.match(render({ id: 'n1', seq: 1, body: 'x', awaiting: true }), /waiting for Claude/);
-    const pending = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: false, outcome: 'done' }, pendingReply: true });
-    assert.match(pending, /follow-up not sent/);
-    assert.match(pending, /data-act="send"/);
+  it('strips the speaker prefix rather than printing it', () => {
+    const html = render(answered('Removed it.'));
+    assert.doesNotMatch(html, /Claude: Removed it/);
+    assert.match(html, /Removed it\./);
+  });
+
+  it('dims the answer that was turned down and keeps the reason beside it', () => {
+    const html = render(
+      answered('Skipped — the note reads only "test".', {
+        rejected: true,
+        addenda: ['Claude: Skipped — the note reads only "test".', 'I wanted an explanation, not an edit.'],
+      }),
+    );
+    assert.match(html, />Rejected</);
+    assert.match(html, /class="block claude dim"/, 'still readable, no longer the live thing');
+    assert.match(html, /You · rejected|You &#183; rejected/);
+    assert.match(html, /I wanted an explanation, not an edit\./);
+    assert.match(html, /Claude is working on it/, 'another attempt is owed');
+    assert.doesNotMatch(html, /data-act="approve"/, 'nothing to approve while it is being redone');
+  });
+
+  it('collapses to the snippet and one line once it is settled', () => {
+    const html = render(answered('Renamed it.', { done: true, body: 'rename prop to isPending' }));
+    assert.match(html, /class="card done"/);
+    assert.match(html, /class="summary"/);
+    assert.match(html, /rename prop to isPending/);
+    assert.doesNotMatch(html, /class="actions"/, 'nothing left to do');
+    assert.match(html, /class="folded"/, 'but the exchange is still there to open');
+  });
+
+  it('marks the state on the card rather than fading it', () => {
+    // Dimming a whole card makes it unreadable to say something a word says better.
+    const html = render(answered('Renamed it.', { done: true }));
+    assert.doesNotMatch(html, /opacity/);
+  });
+
+  it('uses a coloured codicon for the kind, and no emoji anywhere', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'x', kind: 'bug', kindIcon: 'bug', kindLabel: 'bug', kindColor: '#e08d8d' });
+    assert.match(html, /class="codicon codicon-bug"/);
+    assert.match(html, /color:#e08d8d/);
+    assert.match(html, /title="bug"/, 'the name is in the tooltip, not on the card');
+    assert.doesNotMatch(html, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u, 'no emoji');
+  });
+
+  it('offers to send a reply that has been written but not sent', () => {
+    const html = render(answered('Done.', { pendingReply: true, addenda: ['Claude: Done.', 'not quite'] }));
+    assert.match(html, /data-act="send"[^>]*>Send your reply</);
+  });
+
+  it('says the file is gone, and stops offering to open it', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'x', missing: true });
+    assert.match(html, /class="ref gone"/);
+  });
+
+  it('marks a note whose lines have moved out from under it', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'x', orphaned: true });
+    assert.match(html, /class="ref stale"/);
+    assert.match(html, /may be wrong/);
+  });
+
+  it('keeps screenshots, and offers to take one off while the note is live', () => {
+    const shot = [{ src: 'vscode://x/a.png', path: '/tmp/a.png', name: 'a.png' }];
+    const html = render({ id: 'n1', seq: 1, body: 'x', attachments: shot });
+    assert.match(html, /data-shot="\/tmp\/a\.png"/);
+    assert.match(html, /data-unshot="\/tmp\/a\.png"/);
+  });
+
+  it('keeps delete and copy in the overflow, off the card face', () => {
+    // Three buttons is the tightest row that fits 420px; a fourth would wrap, and a wrapped
+    // verb stops reading as a button.
+    assert.match(render({ id: 'n1', seq: 1, body: 'x' }), /data-act="more"/);
   });
 });
 
 describe('rendering what Claude wrote', () => {
-  const render = (addenda: string[]): string => {
+  const withReply = (text: string): string => {
     const h = harness();
     h.fire('message', {
       data: {
         type: 'notes',
-        groups: [
+        cards: [
           {
-            base: 'a.ts',
-            dir: 'src',
-            notes: [{ id: 'n1', seq: 1, kind: 'comment', kindIcon: 'comment', where: 'L1', body: 'x', addenda }],
+            id: 'n1', seq: 1, kind: 'comment', kindIcon: 'comment', kindLabel: 'change request',
+            kindColor: '#e0894a', fileRef: 'a.ts:1', firstLine: 1, body: 'x',
+            addenda: [`Claude: ${text}`], sent: { changed: true, outcome: 'done' },
           },
         ],
         sent: [],
@@ -473,113 +531,21 @@ describe('rendering what Claude wrote', () => {
     return h.root.innerHTML;
   };
 
-  it('turns a markdown link into one clickable reference, not a label plus a long path', () => {
-    // The raw form showed both, and a repository path is long enough to push the card sideways.
-    const html = render(['Claude: moved it into [QuestionNavigation.styles.tsx:21](domains/hr/libs/grow/x.tsx)']);
-    assert.match(html, /data-open="domains\/hr\/libs\/grow\/x\.tsx"/);
-    assert.match(html, />QuestionNavigation\.styles\.tsx:21</);
-    assert.doesNotMatch(html, /\]\(domains/, 'no markdown syntax left on screen');
+  it('turns a markdown link into one clickable reference', () => {
+    const html = withReply('Removed it in [Question.tsx:35](src/Question.tsx).');
+    assert.match(html, /data-open="src\/Question\.tsx"/);
+    assert.match(html, /Question\.tsx:35/);
+    assert.doesNotMatch(html, /\]\(/, 'no raw markdown left');
   });
 
   it('renders backticked code as code', () => {
-    assert.match(render(['Claude: dropped the `styled-components` import']), /<code>styled-components<\/code>/);
-  });
-
-  it('labels the speaker instead of leaving "Claude:" in the sentence', () => {
-    const html = render(['Claude: did the thing']);
-    assert.match(html, /class="who">Claude</);
-    assert.doesNotMatch(html, /Claude: did the thing/);
-  });
-
-  it('leaves your own turns unlabelled', () => {
-    const html = render(['not quite — put it above']);
-    assert.doesNotMatch(html, /class="who"/);
-    assert.match(html, /not quite/);
+    assert.match(withReply('Removed the `// test comment` line.'), /<code>\/\/ test comment<\/code>/);
   });
 
   it('escapes before it renders, so markup in the text stays text', () => {
-    const html = render(['Claude: careful with <script>alert(1)</script> and [x](y)']);
+    const html = withReply('Wrapped it in <script>alert(1)</script> tags.');
     assert.doesNotMatch(html, /<script>/);
     assert.match(html, /&lt;script&gt;/);
-    assert.match(html, /data-open="y"/, 'the link still renders');
-  });
-});
-
-describe('panel iconography', () => {
-  const render = (note: Record<string, unknown>): string => {
-    const h = harness();
-    h.fire('message', {
-      data: {
-        type: 'notes',
-        groups: [{ base: 'a.ts', dir: 'src', notes: [{ kind: 'comment', kindIcon: 'comment', where: 'L1', ...note }] }],
-        sent: [],
-        kinds: [],
-      },
-    });
-    return h.root.innerHTML;
-  };
-
-  it('uses codicons, not emoji, for every action and status', () => {
-    // Kinds have always used the editor's own icon set; the actions used emoji, which sit on a
-    // different baseline and render differently per platform.
-    const html = render({
-      id: 'n1', seq: 1, body: 'x',
-      attachments: [{ src: 'x', path: '/tmp/a.png', name: 'a.png' }],
-    });
-    for (const name of ['codicon-comment', 'codicon-file-media', 'codicon-check', 'codicon-send', 'codicon-kebab-vertical']) {
-      assert.match(html, new RegExp(name), `${name} is used`);
-    }
-    // Listed individually: a character class over these needs the `u` flag to be meaningful,
-    // and the point is the specific glyphs that used to be here.
-    for (const glyph of ['➤', '📎', '↳', '✕', '⋯', '↺']) {
-      assert.ok(!html.includes(glyph), `${glyph} is no longer in the card`);
-    }
-  });
-
-  it('marks a done card rather than fading it', () => {
-    // The card carries Claude's account of what it changed, so it has to stay legible.
-    const html = render({ id: 'n1', seq: 1, body: 'x', done: true, sent: { changed: false, outcome: 'done' } });
-    assert.match(html, /class="card done settled/);
-    assert.match(html, /codicon-pass-filled/, 'and says so with an icon');
-  });
-});
-
-describe('sending a second round', () => {
-  /** Renders the sent section, which is where a follow-up is written and sent from. */
-  const renderSent = (sent: Array<Record<string, unknown>>): string => {
-    const h = harness();
-    h.fire('message', { data: { type: 'notes', groups: [], sent, kinds: [] } });
-    return h.root.innerHTML;
-  };
-
-  const answered = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    id: 'n1',
-    seq: 1,
-    kind: 'comment',
-    kindIcon: 'comment',
-    where: 'L1',
-    body: 'remove this comment',
-    sent: { changed: false, outcome: 'done' },
-    ...over,
-  });
-
-  it('offers to send every follow-up at once', () => {
-    // The reported gap: after a round is answered you reply to several notes, and the only
-    // way to send them was one card at a time — the batch send had disappeared with the last
-    // unsent note.
-    const html = renderSent([answered({ pendingReply: true }), answered({ id: 'n2', seq: 2, pendingReply: true })]);
-    assert.match(html, /data-global="redline\.submit"/, 'a send action in the sent section');
-    assert.match(html, /send 2 follow-ups/);
-  });
-
-  it('counts one follow-up in the singular', () => {
-    assert.match(renderSent([answered({ pendingReply: true }), answered({ id: 'n2', seq: 2 })]), /send 1 follow-up</);
-  });
-
-  it('says nothing when every answer has been read and left alone', () => {
-    const html = renderSent([answered(), answered({ id: 'n2', seq: 2 })]);
-    assert.doesNotMatch(html, /data-global="redline\.submit"/);
-    assert.match(html, /clear sent/, 'the section is still there');
   });
 });
 
@@ -591,7 +557,7 @@ describe('repainting the panel', () => {
     const h = harness();
     const message = {
       type: 'notes',
-      groups: [{ base: 'a.ts', dir: 'src', notes: [{ id: 'n1', seq: 1, kind: 'comment', kindIcon: 'comment', where: 'L1', body: 'x' }] }],
+      cards: [{ id: 'n1', seq: 1, kind: 'comment', kindIcon: 'comment', fileRef: 'a.ts:1', firstLine: 1, body: 'x' }],
       sent: [],
       kinds: [],
     };
@@ -607,7 +573,7 @@ describe('repainting the panel', () => {
     const h = harness();
     const msg = (body: string): Record<string, unknown> => ({
       type: 'notes',
-      groups: [{ base: 'a.ts', dir: 'src', notes: [{ id: 'n1', seq: 1, kind: 'comment', kindIcon: 'comment', where: 'L1', body }] }],
+      cards: [{ id: 'n1', seq: 1, kind: 'comment', kindIcon: 'comment', fileRef: 'a.ts:1', firstLine: 1, body }],
       sent: [],
       kinds: [],
     });
@@ -625,12 +591,12 @@ describe('filtering by state', () => {
 
   const many = (notes: Array<Record<string, unknown>>): Record<string, unknown> => ({
     type: 'notes',
-    groups: [{ base: 'a.ts', dir: 'src', notes, kinds: [] }],
+    cards: notes,
     sent: [],
     kinds: [],
   });
   const n = (id: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    id, seq: Number(id.slice(1)), kind: 'comment', kindIcon: 'comment', where: 'L1', body: 'note ' + id, ...over,
+    id, seq: Number(id.slice(1)), kind: 'comment', kindIcon: 'comment', fileRef: 'a.ts:1', firstLine: 1, body: 'note ' + id, ...over,
   });
 
   it('stays out of the way until there is enough to lose something in', () => {
@@ -682,91 +648,3 @@ describe('filtering by state', () => {
   });
 });
 
-describe('a note pointing at something that is gone', () => {
-  const render = (note: Record<string, unknown>): string => {
-    const h = harness();
-    h.fire('message', {
-      data: {
-        type: 'notes',
-        groups: [{ base: 'a.ts', dir: 'src', notes: [{ kind: 'comment', kindIcon: 'comment', where: 'L12', ...note }] }],
-        sent: [],
-        kinds: [],
-      },
-    });
-    return h.root.innerHTML;
-  };
-
-  it('says so when the file has been deleted, and stops offering to open it', () => {
-    // Claude deleting a file left its notes looking perfectly healthy — clicking one did
-    // nothing at all, with no sign of why.
-    const html = render({ id: 'n1', seq: 1, body: 'rename this', missing: true, snippet: 'const a = 1' });
-    assert.match(html, /class="where gone"/);
-    assert.doesNotMatch(html, /class="where gone"[^>]*data-act="reveal"/, 'no longer opens');
-    assert.match(html, /the file is gone/);
-  });
-
-  it('marks a note whose lines have moved out from under it', () => {
-    // `orphaned` was computed, sent to the panel, and then never rendered.
-    const html = render({ id: 'n1', seq: 1, body: 'x', orphaned: true, snippet: 'const a = 1' });
-    assert.match(html, /class="where stale"/);
-    assert.match(html, /may be wrong/);
-    assert.match(html, /data-act="reveal"/, 'still worth opening — the file is there');
-  });
-
-  it('leaves a healthy note alone', () => {
-    const html = render({ id: 'n1', seq: 1, body: 'x', snippet: 'const a = 1' });
-    assert.doesNotMatch(html, /class="where gone"/);
-    assert.doesNotMatch(html, /class="where stale"/);
-    assert.match(html, /Open in editor/);
-  });
-});
-
-describe('approving what Claude changed', () => {
-  const render = (note: Record<string, unknown>): string => {
-    const h = harness();
-    h.fire('message', {
-      data: {
-        type: 'notes',
-        groups: [{ base: 'a.ts', dir: 'src', notes: [{ kind: 'comment', kindIcon: 'comment', where: 'L1', ...note }] }],
-        sent: [],
-        kinds: [],
-      },
-    });
-    return h.root.innerHTML;
-  };
-
-  it('says a note is waiting for you, not that it is finished', () => {
-    // Claude reporting a note as done is a claim about the code, not a verdict on it.
-    const html = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: true, outcome: 'done' } });
-    assert.match(html, /waiting for approval/);
-    assert.doesNotMatch(html, />\s*done</);
-  });
-
-  it('offers the two answers that need no typing', () => {
-    const html = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: true, outcome: 'done' } });
-    assert.match(html, /data-act="approve"/);
-    assert.match(html, /data-act="needswork"/);
-    assert.doesNotMatch(html, /data-act="done"/, 'not two ways to close the same note');
-  });
-
-  it('calls it approved once you have said so', () => {
-    const html = render({ id: 'n1', seq: 1, body: 'x', done: true, sent: { changed: true, outcome: 'done' } });
-    assert.match(html, /approved/);
-    assert.match(html, /data-act="reopen"/);
-    assert.doesNotMatch(html, /data-act="approve"/);
-  });
-
-  it('leaves a note Claude has not answered alone', () => {
-    const html = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: false } });
-    assert.match(html, /not addressed yet/);
-    assert.match(html, /data-act="done"/, 'still closable by hand');
-    assert.doesNotMatch(html, /data-act="approve"/);
-  });
-
-  it('waits for the reply to go before asking for approval again', () => {
-    const html = render({
-      id: 'n1', seq: 1, body: 'x', pendingReply: true, sent: { changed: true, outcome: 'done' },
-    });
-    assert.doesNotMatch(html, /data-act="approve"/, 'the conversation is live again');
-  });
-});
