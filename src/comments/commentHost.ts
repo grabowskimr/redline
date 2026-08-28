@@ -113,21 +113,37 @@ export class CommentHost implements vscode.Disposable {
    */
   private readonly replyOpen = new Set<string>();
 
-  /** Open the follow-up box on a note and put the cursor in it. */
+  /**
+   * Open the follow-up box on a note, ready to type in.
+   *
+   * Deliberately minimal. The first version called `refresh`, which reassigns
+   * `thread.comments` — and VS Code rebuilds the reply widget from that without disposing the
+   * old one, so a second "Follow-up…" bar appeared beside the first. It also re-opened the
+   * document, which can re-enter thread creation and produce a second widget for the same
+   * note. Neither is needed: the widget is already on screen, because its own toolbar was just
+   * clicked.
+   *
+   * `focusCommentOnCurrentLine` reveals the thread under the cursor with focus in the reply
+   * editor, which is what makes the box land ready to type rather than as a bar to click. It
+   * works on the cursor's line, so the cursor moves there first — but only within the editor
+   * that is already showing.
+   */
   async openReply(noteId: string): Promise<boolean> {
     const thread = this.threadsByNoteId.get(noteId);
     if (!thread) return false;
     this.replyOpen.add(noteId);
-    this.refresh(noteId);
+    // Straight onto the thread: no comment rebuild, so nothing can be duplicated.
+    thread.canReply = true;
     thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-    // The focus command works on the thread under the cursor, so the cursor goes there first.
-    try {
-      const editor = await vscode.window.showTextDocument(thread.uri, { preview: false, preserveFocus: false });
+    const editor = vscode.window.activeTextEditor;
+    if (editor?.document.uri.toString() === thread.uri.toString()) {
       const at = thread.range?.start ?? new vscode.Position(0, 0);
       editor.selection = new vscode.Selection(at, at);
-      await vscode.commands.executeCommand('workbench.action.focusCommentOnCurrentLine');
-    } catch {
-      // The box is open either way; only the focus was best-effort.
+      try {
+        await vscode.commands.executeCommand('workbench.action.focusCommentOnCurrentLine');
+      } catch {
+        // The box is open either way; only the focus was best-effort.
+      }
     }
     return true;
   }

@@ -285,7 +285,8 @@ export function noteCommands(deps: Deps) {
       return;
     }
     if (!(await host.openReply(id))) {
-      // No widget on screen for it — the prompt is the next best thing.
+      // No widget for it — the file is not open, or the note is being acted on from the panel.
+      // The prompt is the next best thing; losing the click would be worse.
       await addFollowUp(id);
     }
   }

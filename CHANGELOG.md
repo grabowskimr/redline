@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.1 — 2026-08-28
+
+- **Follow-up** sits next to **Send** in the widget toolbar, in that order: you write the
+  follow-up, then you send it.
+- Fixed: clicking it drew a *second* "Follow-up…" bar beside the first. Opening the box went
+  through the same refresh the rest of the extension uses, which reassigns the thread's comment
+  array — VS Code rebuilds the reply widget from that without disposing the old one. It also
+  re-opened the document, which can re-enter thread creation and leave two widgets on one note.
+  Neither was needed: the widget is on screen already, because its own toolbar was just clicked.
+- The box now lands **ready to type** instead of as a bar you click first.
+
 ## 1.3.0 — 2026-08-28
 
 - The follow-up box no longer sits under every note in the editor widget. It was there whether

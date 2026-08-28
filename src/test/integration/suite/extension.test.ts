@@ -97,6 +97,9 @@ describe('Redline (integration)', function () {
     // below a card that already carries the note, the answer and a row of actions.
     const note = await api.createNoteAt(sampleUri, new vscode.Range(0, 0, 0, 4), 'toolbar follow-up');
     assert.ok(note, 'a note to attach a widget to');
+    // The widget is on screen when its toolbar is clicked, which is what both commands
+    // resolve the thread from.
+    await vscode.window.showTextDocument(sampleUri, { preview: false });
     try {
       assert.equal(api.replyOpenOn(note.id), false, 'no reply box until asked');
 
@@ -123,6 +126,13 @@ describe('Redline (integration)', function () {
     const entry = title.find((e) => e.command === 'redline.followUpHere');
     assert.ok(entry, 'the widget toolbar offers it');
     assert.match(entry.when, /!commentThreadIsEmpty/, 'a thread with no note has nothing to follow up');
+
+    // Beside send, and before it: writing the follow-up is what you do first. The toolbar is a
+    // row of icons with nothing to explain them, so their order is the only grouping there is.
+    const rank = (command: string): number =>
+      Number(/navigation@([\d.]+)/.exec(title.find((e) => e.command === command)?.group ?? '')?.[1] ?? NaN);
+    assert.ok(rank('redline.followUpHere') < rank('redline.sendSelected'), 'follow-up comes before send');
+    assert.equal(rank('redline.sendSelected') - rank('redline.followUpHere'), 1, 'with nothing between them');
   });
 
   it('runs every palette-safe command with no arguments without throwing', async () => {
