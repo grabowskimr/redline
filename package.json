@@ -2,7 +2,7 @@
   "name": "redline",
   "displayName": "Redline",
   "description": "Review Claude Code's work — inline notes on the lines that need changes, handed back as one prompt.",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "publisher": "marcin",
   "license": "MIT",
   "repository": {
@@ -79,6 +79,18 @@
         "command": "redline.cancelReply",
         "title": "Cancel",
         "category": "Redline"
+      },
+      {
+        "command": "redline.approveNote",
+        "title": "Approve the Change",
+        "category": "Redline",
+        "icon": "$(thumbsup)"
+      },
+      {
+        "command": "redline.needsWork",
+        "title": "Needs More Work",
+        "category": "Redline",
+        "icon": "$(thumbsdown)"
       },
       {
         "command": "redline.followUpHere",
@@ -204,6 +216,11 @@
         "title": "Send Notes to Claude Code",
         "category": "Redline",
         "icon": "$(send)"
+      },
+      {
+        "command": "redline.cancelQueued",
+        "title": "Do Not Send the Queued Notes",
+        "category": "Redline"
       },
       {
         "command": "redline.sendSelected",
@@ -633,6 +650,14 @@
         {
           "command": "redline.followUpHere",
           "when": "false"
+        },
+        {
+          "command": "redline.approveNote",
+          "when": "false"
+        },
+        {
+          "command": "redline.needsWork",
+          "when": "false"
         }
       ]
     },
@@ -787,6 +812,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show note and changed-file counts in the status bar."
+        },
+        "redline.runGutter": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Mark the last run’s changes in the editor gutter, beside the git extension’s marks against HEAD. Adds a “Claude’s last run” entry to the Source Control view, because a quick diff can only be contributed by one."
         },
         "redline.trace": {
           "type": "string",

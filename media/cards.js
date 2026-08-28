@@ -114,11 +114,20 @@
 
   function statusOf(n) {
     if (!n.sent) return '';
+    if (n.done) return icon('pass-filled') + ' approved';
+    // Claude saying it is finished is a claim about the code, not a verdict on it. The note
+    // waits for someone to look — which is the whole point of reviewing.
+    if (awaitingApproval(n)) return icon('eye') + ' waiting for approval';
     const o = n.sent.outcome;
     if (o === 'done') return icon('pass-filled') + ' done';
     if (o === 'skipped') return icon('circle-slash') + ' skipped' + (n.sent.reply ? ' — ' + esc(n.sent.reply) : '');
     if (o === 'answered') return '💬 answered';
     return n.sent.changed ? icon('diff-modified') + ' code changed' : icon('clock') + ' not addressed yet';
+  }
+
+  /** A note Claude has finished with, that nobody has agreed with yet. */
+  function awaitingApproval(n) {
+    return !!n.sent && !n.done && !n.pendingReply && (n.sent.outcome === 'done' || n.sent.changed);
   }
 
   /** Strip the common leading indentation so code previews hug the left edge. */
@@ -184,7 +193,10 @@
     // click rather than through the ⋯ menu. A reply that has not been sent makes it live
     // again: the conversation is waiting on you, not on Claude. Declared first because the
     // screenshot and action markup below both depend on it.
-    const settled = !!(n.done || (n.sent && n.sent.outcome)) && !n.pendingReply;
+    // A note waiting to be approved is deliberately *not* settled: the before and after are
+    // the thing being judged, and a settled card hides both.
+    const awaiting = awaitingApproval(n);
+    const settled = !!(n.done || (n.sent && n.sent.outcome)) && !n.pendingReply && !awaiting;
 
     const beforeAfter = n.after !== undefined && n.after !== null;
     const codeLabel = n.missing
@@ -253,7 +265,7 @@
     const status = n.pendingReply
       ? icon('edit') + ' follow-up not sent'
       : n.done
-      ? icon('pass-filled') + ' done'
+      ? icon('pass-filled') + ' approved'
       : n.awaiting
       ? '<span class="codicon codicon-loading codicon-modifier-spin"></span> waiting for Claude'
       : n.sent
@@ -321,6 +333,11 @@
       ) +
       (settled
         ? btn('reopen', icon('history'), n.done ? 'Reopen this note' : 'Mark as not done')
+        : awaiting
+        ? // Two clicks instead of a sentence: the usual answers to "I changed it" are "good"
+          // and "not quite", and both used to need typing.
+          btn('approve', icon('thumbsup'), 'The change is good — close this note', 'go') +
+          btn('needswork', icon('thumbsdown'), 'Not right yet — reopen and say why')
         : btn(
             'attach',
             icon('file-media'),
@@ -345,6 +362,25 @@
     );
   }
 
+  /** What the session is doing right now, when the hook is reporting it. */
+  var activity = null;
+
+  /**
+   * A line under the session strip while a run is going.
+   *
+   * A silent minute and a hung one look the same otherwise — and the session's own terminal,
+   * which would show this, is often not the window you are looking at.
+   */
+  function activityLine() {
+    if (!activity || !activity.running) return '';
+    var what = activity.file
+      ? '<span class="said">' + esc(activity.file) + '</span>'
+      : '<span class="said">working…</span>';
+    var count =
+      activity.files > 1 ? '<span class="tool">' + activity.files + ' files</span>' : '';
+    return '<div class="activity">' + icon('sync') + ' ' + what + count + '</div>';
+  }
+
   function sessionStrip() {
     const s = state.session;
     if (!s) return '';
@@ -352,6 +388,17 @@
       s.state === 'working' ? 'Claude is working…' : s.state === 'idle' ? 'watching' : 'not watched';
     const who = s.label ? esc(s.label) : 'No Claude Code session detected';
     const hasRecent = typeof s.changedFiles === 'number' && s.changedFiles > 0;
+    // Held until the agent is free. Nothing else says so once the status-bar message is gone,
+    // and the notes look simply unsent.
+    const queued = s.queued
+      ? '<span class="queued" title="They go the moment Claude finishes">' +
+        icon('clock') +
+        ' ' +
+        s.queued +
+        ' queued<button data-global="redline.cancelQueued" title="Do not send them automatically">' +
+        icon('close') +
+        '</button></span>'
+      : '';
     // "could not read the file list" must not look like "nothing changed".
     if (s.changesUnavailable) {
       return (
@@ -413,12 +460,14 @@
       stateText +
       '</span>' +
       changed +
+      queued +
       '</span>' +
       '<span class="controls">' +
       review +
       '<button data-global="redline.pickSession" title="Choose Claude Code session">' + icon('arrow-swap') + '</button>' +
       '</span>' +
-      '</div>'
+      '</div>' +
+      activityLine()
     );
   }
 
@@ -643,6 +692,12 @@
     switch (el.dataset.act) {
       case 'reveal':
         cmd('redline.revealNote', id);
+        break;
+      case 'approve':
+        cmd('redline.approveNote', id);
+        break;
+      case 'needswork':
+        cmd('redline.needsWork', id);
         break;
       case 'done':
       case 'reopen':
@@ -932,6 +987,9 @@
       state.sent = msg.sent || [];
       state.kinds = msg.kinds || state.kinds;
       ready = true;
+      scheduleRender();
+    } else if (msg.type === 'activity') {
+      activity = msg.activity || null;
       scheduleRender();
     } else if (msg.type === 'idle') {
       // The extension finished whatever the last click started.

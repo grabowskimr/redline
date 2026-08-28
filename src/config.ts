@@ -96,6 +96,10 @@ export class Config implements vscode.Disposable {
   get clearDoneAfterReport(): boolean {
     return this.get('clearDoneAfterReport', false);
   }
+  /** Whether the last run's changes are marked in the editor gutter. */
+  get runGutter(): boolean {
+    return this.get('runGutter', true);
+  }
   get watchSessions(): boolean {
     return this.get('watchSessions', true);
   }

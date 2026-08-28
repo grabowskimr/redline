@@ -659,3 +659,46 @@ h3 {
 .where.stale {
   color: var(--vscode-editorWarning-foreground);
 }
+
+/* Notes held until the agent is free. */
+.session .queued {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  color: var(--vscode-editorWarning-foreground);
+}
+.session .queued button {
+  background: transparent;
+  color: inherit;
+  padding: 0 2px;
+}
+
+/* ── what the session is doing ───────────────────────────────────────── */
+.activity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 5px;
+  font-size: calc(var(--vscode-font-size) - 1px);
+  color: var(--vscode-descriptionForeground);
+}
+.activity .said {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family);
+}
+.activity .tool {
+  flex: 0 0 auto;
+  opacity: 0.75;
+  margin-left: auto;
+}
+.activity .codicon-sync {
+  animation: spin 1.6s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

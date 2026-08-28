@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.4.0 — 2026-08-28
+
+- **Sessions come from Claude Code itself.** `claude agents --json` lists every session with its
+  directory, its real id and what it is doing. Redline worked this out from the process table
+  instead — one `ps` plus an `lsof` per Claude process — which cost about a third of a second per
+  lookup, could not see background agents, returned nothing at all on Windows, and never yielded
+  a session id: that had to be inferred from which transcript was modified most recently, which
+  is what put a reply in the wrong session when two were open. The old path is kept for a CLI
+  too old to have the subcommand.
+- **Outcomes arrive as a file, not as prose.** The prompt names a path and asks for JSON; Redline
+  reads that and falls back to scanning the reply for `#12 done` lines only when there is none.
+  A model that writes `#12 — done`, or puts the line in a code fence, or covers three notes in
+  one sentence defeats any parser — which is what produced "0 of 3 addressed" with all three
+  addressed. The file is consumed on read, so a later round cannot inherit it.
+- **A note waits for your approval.** Claude reporting one as finished is a claim about the code,
+  not a verdict on it, so the note no longer closes itself: it moves to **waiting for approval**,
+  keeps its before and after on the card, and offers two buttons that need no typing — 👍 closes
+  it, 👎 reopens it with the follow-up box open. `redline.clearDoneAfterReport` now clears notes
+  *you* approved rather than ones Claude declared finished.
+- **The last run's changes show in the gutter**, beside the git extension's marks against HEAD.
+  Those answer "what is uncommitted", which in a worktree an agent has worked in for an hour is
+  nearly everything; these answer "what did the last run change in this file". Off with
+  `redline.runGutter`.
+- **The panel says what the session is working on** — the file it is writing and how many it has
+  touched — read from the plugin's own record rather than from the session. A silent minute and a
+  hung one look the same otherwise, and the terminal that would show this is often not the window
+  you are looking at.
+- **Sending while Claude is mid-turn offers to wait.** Notes dropped into the middle of a turn are
+  as likely to be ignored as read; queued ones go the moment the run ends, which the hook already
+  reports.
+
 ## 1.3.1 — 2026-08-28
 
 - **Follow-up** sits next to **Send** in the widget toolbar, in that order: you write the

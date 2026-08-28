@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { AGENT_TURN_PREFIX, hasUnsentReply, isOpen, ReviewNote } from '../model/note';
 import { copyToClipboard, currentHashes, openPreview, renderNotes } from '../export/submit';
-import { parseReport } from '../export/report';
+import { parseReport, ReportItem } from '../export/report';
+import { takeReport } from '../claude/reportFile';
 import { pickTarget, readTarget, resolveTarget, sendBatchToClaude, SessionTarget, targetByKey } from '../claude/claudeSession';
 import { ClaudeSessionInfo, findSessions, latestSessionAmong, recentAssistantText } from '../claude/transcripts';
 import { readStopMarker } from '../claude/runTrees';
@@ -60,7 +61,33 @@ export function batchCommands(deps: Deps) {
    * Claude Code session for this folder when one is reachable, and keep the notes visible
    * as "sent" so the round can be tracked.
    */
-  async function submit(): Promise<void> {
+  /**
+   * A batch waiting for the agent to finish what it is doing.
+   *
+   * Sending into a run that is already going means the notes land in the middle of a turn,
+   * where they are as likely to be ignored as read. Holding them costs nothing and the moment
+   * to send is one we already know about — the hook tells us when a run ends.
+   */
+  let queued = false;
+
+  /** Called when a run ends: send what was held, if anything. */
+  async function flushQueued(): Promise<void> {
+    if (!queued) return;
+    queued = false;
+    void vscode.window.setStatusBarMessage('Redline: Claude is free — sending the notes', 4000);
+    await submit({ queueIfBusy: false });
+  }
+
+  function cancelQueued(): void {
+    if (!queued) {
+      void vscode.window.showInformationMessage('Redline: nothing is waiting to be sent.');
+      return;
+    }
+    queued = false;
+    void vscode.window.setStatusBarMessage('Redline: the notes will not be sent automatically', 4000);
+  }
+
+  async function submit(opts: { queueIfBusy?: boolean } = {}): Promise<void> {
     const open = store.notes.filter(isOpen);
     // Follow-ups written on notes that have already been answered. Sending a round, reading
     // the answers and replying to several of them is the ordinary way this gets used, and
@@ -70,6 +97,21 @@ export function batchCommands(deps: Deps) {
     if (batch.length === 0) {
       void vscode.window.showInformationMessage('Redline: no notes to send — add one first.');
       return;
+    }
+    // Busy: hold the batch rather than dropping it into the middle of a turn, where it is as
+    // likely to be ignored as read.
+    if (opts.queueIfBusy !== false && deps.signals?.running === true) {
+      const choice = await vscode.window.showInformationMessage(
+        `Redline: Claude is working. Send ${batch.length} note${batch.length === 1 ? '' : 's'} when it finishes?`,
+        'Send when free',
+        'Send now',
+      );
+      if (!choice) return;
+      if (choice === 'Send when free') {
+        queued = true;
+        void vscode.window.setStatusBarMessage('Redline: queued — will send when Claude finishes', 6000);
+        return;
+      }
     }
     const ids = batch.map((n) => n.id);
     // What Undo has to restore. A note being sent *again* was already sent, and clearing its
@@ -294,6 +336,15 @@ export function batchCommands(deps: Deps) {
       if (!quiet) void vscode.window.showInformationMessage('Redline: no sent notes to update.');
       return 0;
     }
+    // The report file first: a run that wrote one has said exactly what happened, with no
+    // prose to interpret. Everything below is the fallback for a run that did not.
+    const root = await range.repoRoot();
+    const filed = root ? await takeReport(root) : undefined;
+    if (filed) {
+      const applied = applyItems(filed, sentNotes, quiet, "Claude's report");
+      if (applied > 0) return applied;
+    }
+
     let source = 'clipboard';
     let text = '';
     const key = target?.key ?? sentNotes.find((n) => n.sent?.target)?.sent?.target;
@@ -332,8 +383,21 @@ export function batchCommands(deps: Deps) {
       }
       return 0;
     }
-    // Only sent notes may receive results: stale lines from earlier rounds must never
-    // touch a note that was not part of a send.
+    return applyItems(items, sentNotes, quiet, source);
+  }
+
+  /**
+   * Apply outcomes to the notes they name.
+   *
+   * Only sent notes may receive results: a stale line from an earlier round must never touch a
+   * note that was not part of a send.
+   */
+  function applyItems(
+    items: readonly ReportItem[],
+    sentNotes: readonly ReviewNote[],
+    quiet: boolean,
+    source: string,
+  ): number {
     const bySeq = new Map(sentNotes.map((n) => [n.seq, n]));
     const patches: Array<{ id: string; patch: Partial<ReviewNote> }> = [];
     for (const it of items) {
@@ -350,11 +414,13 @@ export function batchCommands(deps: Deps) {
         const addendum = `${AGENT_TURN_PREFIX} ${it.text}`;
         if (!n.addenda.includes(addendum)) patch.addenda = [...n.addenda, addendum];
       }
-      if (it.outcome === 'done') patch.done = true;
+      // Deliberately *not* marking the note done. Claude saying it is finished is a claim
+      // about the code, and the note is now waiting for someone to look at the change and
+      // agree — which is the point of a review. Approving is what closes it.
       patches.push({ id: n.id, patch });
     }
     store.updateMany(patches);
-    if (!quiet) {
+    if (!quiet && patches.length > 0) {
       void vscode.window.showInformationMessage(
         `Redline: applied ${patches.length} result${patches.length === 1 ? '' : 's'} from ${source}.`,
       );
@@ -421,7 +487,9 @@ export function batchCommands(deps: Deps) {
     // questions stay: those still need reading.
     let cleared: ReviewNote[] = [];
     if (applied > 0 && config.clearDoneAfterReport) {
-      cleared = store.notes.filter((n) => n.sent?.outcome === 'done');
+      // Notes *you* approved, not ones Claude declared finished: those are waiting to be
+      // looked at, and clearing them would throw away the review before it happened.
+      cleared = store.notes.filter((n) => n.done && n.sent);
       if (cleared.length > 0) store.delete(cleared.map((n) => n.id));
     }
 
@@ -778,6 +846,9 @@ export function batchCommands(deps: Deps) {
     showLog,
     onAgentFinished,
     onExternalRunFinished,
+    flushQueued,
+    cancelQueued,
+    isQueued: (): boolean => queued,
     onHookRunFinished,
     hookRunsReported: (): number => runsReported,
   };

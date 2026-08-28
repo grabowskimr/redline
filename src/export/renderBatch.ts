@@ -66,6 +66,8 @@ export interface RenderModel {
   config: RenderConfig;
   /** Every note has been through a round already: this is a continuation, not a new review. */
   followUp: boolean;
+  /** A file to write the outcomes to, so they do not have to be read back out of prose. */
+  reportPath?: string;
   /**
    * At least one note carries an exchange with the agent. Not the same as `followUp`, which
    * means *every* note does: a batch can mix new notes with replies to answered ones, and the
@@ -89,6 +91,8 @@ export interface RenderOptions {
   onlyIds?: readonly string[];
   /** Include done/sent notes too (defaults to false). */
   includeInactive?: boolean;
+  /** Where to write the machine-readable report, when the plugin can collect one. */
+  reportPath?: string;
 }
 
 export function languageFromPath(p: string): string | undefined {
@@ -243,6 +247,7 @@ export function buildModel(notes: readonly ReviewNote[], opts: RenderOptions): R
     generatedAt: (opts.now ?? new Date()).toISOString(),
     config: opts.config,
     followUp: isFollowUp(selected),
+    ...(opts.reportPath ? { reportPath: opts.reportPath } : {}),
     threads: selected.some((n) => !!n.sent),
   };
   if (opts.git) model.git = opts.git;

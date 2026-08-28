@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Logger } from '../logger';
 import { deliveryToken, discardHandover, stageForHandover } from './handover';
+import { AgentSession, listAgentSessions } from './agentsCli';
 
 const execFileP = promisify(execFile);
 
@@ -13,12 +14,20 @@ export interface SessionTarget {
   /** Stable identity used to remember "where the batch went": `vscode:<name>` / `orca:<handle>`. */
   key: string;
   label: string;
-  kind: 'vscode' | 'orca';
+  kind: 'vscode' | 'orca' | 'agent';
   cwd: string;
   pid: number;
   inWorkspace: boolean;
   terminal?: vscode.Terminal;
   orcaHandle?: string;
+  /**
+   * Claude Code's own id for the conversation, when it told us. Worth having: it is what
+   * `--resume` takes, and it names the transcript to read a reply out of — which used to be
+   * guessed from whichever file was modified last.
+   */
+  sessionId?: string;
+  /** What the CLI says it is doing, when it says: `idle`, `busy`, `blocked`. */
+  status?: string;
 }
 
 interface Proc {
@@ -141,6 +150,154 @@ export function forgetTargets(): void {
 }
 
 async function discoverTargets(logger: Logger): Promise<SessionTarget[]> {
+  // Claude Code's own list first. It knows its sessions — including background agents, which
+  // have no terminal to be found from the process table — and it names them, which the
+  // process table cannot.
+  const sessions = await listAgentSessions();
+  if (sessions.length > 0) {
+    try {
+      return await targetsFromSessions(sessions, logger);
+    } catch (err) {
+      logger.trace(`could not map Claude's session list, falling back: ${String(err)}`);
+    }
+  }
+  return discoverFromProcessTable(logger);
+}
+
+/**
+ * Turn the CLI's session list into targets.
+ *
+ * The process table is still consulted, but only for the one thing the list cannot answer:
+ * which VS Code terminal a session is running inside. That needs the parent chain, which is a
+ * single cheap `ps` — the expensive part was the `lsof` per process to recover a working
+ * directory, and the list gives that outright.
+ */
+async function targetsFromSessions(sessions: AgentSession[], logger: Logger): Promise<SessionTarget[]> {
+  let byPid = new Map<number, Proc>();
+  try {
+    byPid = new Map((await listProcesses()).map((p) => [p.pid, p]));
+  } catch {
+    // No process table: terminals cannot be matched, and everything reads as external.
+  }
+  const terminalPids = new Map<number, vscode.Terminal>();
+  await Promise.all(
+    vscode.window.terminals.map(async (t) => {
+      const pid = await t.processId;
+      if (pid) terminalPids.set(pid, t);
+    }),
+  );
+  const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+  let orcaTerms: OrcaTerminal[] | undefined;
+  const targets: SessionTarget[] = [];
+
+  for (const s of sessions) {
+    const cwd = s.cwd;
+    const inWorkspace = folders.some((f) => cwd === f || cwd.startsWith(f + path.sep));
+    const named = s.name?.trim();
+    const base: Omit<SessionTarget, 'key' | 'label' | 'kind'> = {
+      cwd,
+      pid: s.pid ?? 0,
+      inWorkspace,
+      sessionId: s.sessionId,
+      ...(s.status ? { status: s.status } : {}),
+    };
+
+    // A background agent has no terminal by definition; it is reached by resuming it.
+    if (s.kind === 'background') {
+      targets.push({
+        ...base,
+        key: `agent:${s.sessionId}`,
+        label: `${named || 'background agent'} (Claude Code)`,
+        kind: 'agent',
+      });
+      continue;
+    }
+
+    const terminal = s.pid === undefined ? undefined : terminalFor(s.pid, byPid, terminalPids);
+    if (terminal) {
+      targets.push({
+        ...base,
+        key: `vscode:${terminal.name}:${cwd}`,
+        label: `${terminal.name} (terminal)`,
+        kind: 'vscode',
+        terminal,
+      });
+      continue;
+    }
+    const proc = s.pid === undefined ? undefined : byPid.get(s.pid);
+    if (proc && ancestorMatches(proc, byPid, (p) => /orca/i.test(p.comm))) {
+      try {
+        orcaTerms ??= await orcaTerminals();
+      } catch (err) {
+        logger.warn('orca CLI unavailable', err);
+        orcaTerms = [];
+      }
+      const term = orcaTerminalFor(cwd, orcaTerms);
+      if (term) {
+        targets.push({
+          ...base,
+          key: `orca:${term.handle}`,
+          label: `${term.title?.trim() || 'Claude Code'} — ${path.basename(term.worktreePath ?? cwd)} (Orca)`,
+          kind: 'orca',
+          orcaHandle: term.handle,
+        });
+        continue;
+      }
+    }
+    targets.push({
+      ...base,
+      key: `external:${s.sessionId}`,
+      label: `${named || `pid ${s.pid ?? '?'}`} (outside VS Code)`,
+      kind: 'vscode',
+    });
+  }
+  return sortTargets(targets);
+}
+
+/** The VS Code terminal a process is running in, by walking up to its shell. */
+function terminalFor(
+  pid: number,
+  byPid: Map<number, Proc>,
+  terminalPids: Map<number, vscode.Terminal>,
+): vscode.Terminal | undefined {
+  let cur: Proc | undefined = byPid.get(pid);
+  const direct = terminalPids.get(pid);
+  if (direct) return direct;
+  for (let i = 0; cur && i < 12; i++) {
+    const found = terminalPids.get(cur.pid);
+    if (found) return found;
+    cur = byPid.get(cur.ppid);
+  }
+  return undefined;
+}
+
+function orcaTerminalFor(cwd: string, terms: OrcaTerminal[]): OrcaTerminal | undefined {
+  const same = terms.filter(
+    (t) => t.worktreePath && (cwd === t.worktreePath || cwd.startsWith(t.worktreePath + path.sep)),
+  );
+  return (
+    same.find((t) => /claude/i.test(t.title ?? '')) ??
+    same.find((t) => /claude|esc to interrupt|✳/i.test(t.preview ?? '')) ??
+    same[0]
+  );
+}
+
+function sortTargets(targets: SessionTarget[]): SessionTarget[] {
+  targets.sort(
+    (a, b) =>
+      Number(b.inWorkspace) - Number(a.inWorkspace) ||
+      Number(isReachable(b)) - Number(isReachable(a)),
+  );
+  return targets;
+}
+
+/**
+ * The original discovery, kept for a Claude Code too old to list its own sessions.
+ *
+ * Everything it can find, this finds too — minus the session ids, and minus any background
+ * agent, which has no terminal to be found from.
+ */
+async function discoverFromProcessTable(logger: Logger): Promise<SessionTarget[]> {
   let procs: Proc[];
   try {
     procs = await listProcesses();
@@ -166,14 +323,7 @@ async function discoverTargets(logger: Logger): Promise<SessionTarget[]> {
   for (const c of claudes) {
     const cwd = (await cwdOf(c.pid)) ?? '';
     const inWorkspace = folders.some((f) => cwd === f || cwd.startsWith(f + path.sep));
-    // VS Code integrated terminal?
-    let terminal: vscode.Terminal | undefined;
-    let cur: Proc | undefined = c;
-    for (let i = 0; cur && i < 12; i++) {
-      terminal = terminalPids.get(cur.pid);
-      if (terminal) break;
-      cur = byPid.get(cur.ppid);
-    }
+    const terminal = terminalFor(c.pid, byPid, terminalPids);
     if (terminal) {
       targets.push({
         key: `vscode:${terminal.name}:${cwd}`,
@@ -186,7 +336,6 @@ async function discoverTargets(logger: Logger): Promise<SessionTarget[]> {
       });
       continue;
     }
-    // Orca?
     if (ancestorMatches(c, byPid, (p) => /orca/i.test(p.comm))) {
       try {
         orcaTerms ??= await orcaTerminals();
@@ -194,18 +343,11 @@ async function discoverTargets(logger: Logger): Promise<SessionTarget[]> {
         logger.warn('orca CLI unavailable', err);
         orcaTerms = [];
       }
-      const same = orcaTerms.filter(
-        (t) => t.worktreePath && (cwd === t.worktreePath || cwd.startsWith(t.worktreePath + path.sep)),
-      );
-      const term =
-        same.find((t) => /claude/i.test(t.title ?? '')) ??
-        same.find((t) => /claude|esc to interrupt|✳/i.test(t.preview ?? '')) ??
-        same[0];
+      const term = orcaTerminalFor(cwd, orcaTerms);
       if (term) {
-        const worktree = path.basename(term.worktreePath ?? cwd);
         targets.push({
           key: `orca:${term.handle}`,
-          label: `${term.title?.trim() || 'Claude Code'} — ${worktree} (Orca)`,
+          label: `${term.title?.trim() || 'Claude Code'} — ${path.basename(term.worktreePath ?? cwd)} (Orca)`,
           kind: 'orca',
           cwd,
           pid: c.pid,
@@ -224,12 +366,7 @@ async function discoverTargets(logger: Logger): Promise<SessionTarget[]> {
       inWorkspace,
     });
   }
-  targets.sort(
-    (a, b) =>
-      Number(b.inWorkspace) - Number(a.inWorkspace) ||
-      Number(!!b.terminal || !!b.orcaHandle) - Number(!!a.terminal || !!a.orcaHandle),
-  );
-  return targets;
+  return sortTargets(targets);
 }
 
 export function isReachable(t: SessionTarget): boolean {

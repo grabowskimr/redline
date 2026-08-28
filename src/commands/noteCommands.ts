@@ -291,6 +291,35 @@ export function noteCommands(deps: Deps) {
     }
   }
 
+  /**
+   * Accept the change a note asked for.
+   *
+   * Claude reporting a note as finished is a claim about the code, not a verdict on it — so a
+   * note it has answered sits in "waiting for approval" until someone looks. This is the look.
+   */
+  function approveNote(arg: unknown): void {
+    const id = resolveNoteIdOrPick(deps, arg);
+    const note = id ? store.getById(id) : undefined;
+    if (!note) {
+      void vscode.window.showInformationMessage('Redline: select a note first.');
+      return;
+    }
+    store.update(note.id, { done: true });
+    void vscode.window.setStatusBarMessage(`Redline: #${note.seq} approved`, 4000);
+  }
+
+  /** Not good enough — reopen the note and ask for more, in the same thread. */
+  async function needsWork(arg: unknown): Promise<void> {
+    const id = resolveNoteIdOrPick(deps, arg);
+    const note = id ? store.getById(id) : undefined;
+    if (!note) {
+      void vscode.window.showInformationMessage('Redline: select a note first.');
+      return;
+    }
+    store.update(note.id, { done: false });
+    await followUpHere(note.id);
+  }
+
   async function addFollowUp(arg: unknown): Promise<void> {
     const id = resolveNoteIdOrPick(deps, arg);
     const note = id ? store.getById(id) : undefined;
@@ -526,6 +555,8 @@ export function noteCommands(deps: Deps) {
     cancelReply,
     addFollowUp,
     followUpHere,
+    approveNote,
+    needsWork,
     replyToNote,
     deleteNote,
     toggleDone,

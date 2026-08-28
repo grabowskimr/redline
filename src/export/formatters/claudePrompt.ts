@@ -94,7 +94,32 @@ export function claudePrompt(m: RenderModel): string {
   section('Questions', questions);
   section('FYI', fyi);
 
-  if (m.config.requestReport) {
+  if (m.config.requestReport && m.reportPath) {
+    // A file, not prose. Scanning the transcript for `#12 done` lines worked until a model
+    // wrote `#12 — done`, or put the line in a code fence, or covered three notes in one
+    // sentence — and then the panel said nothing had been addressed when everything had.
+    out.push(
+      '## When you are done',
+      '',
+      `Write this JSON to \`${m.reportPath}\` (create the file; overwrite it if it exists):`,
+      '',
+      '```json',
+      '{ "notes": [',
+      '    { "seq": 12, "outcome": "done", "text": "one sentence about what changed" },',
+      '    { "seq": 13, "outcome": "skipped", "text": "why not" },',
+      '    { "seq": 14, "outcome": "answered", "text": "your answer" }',
+      '] }',
+      '```',
+      '',
+      '`outcome` is `done`, `skipped` or `answered`. Keep `text` to one sentence: it is shown ' +
+        'beside the note in a narrow panel, so say what changed and stop. Point at code as ' +
+        '`[file.ts:12](path/to/file.ts)`, which is rendered as a short link.',
+      '',
+      'Then say the same thing in your reply, in a line per note, so it is readable here too:',
+      '`#<number> done — <what you changed>` · `#<number> skipped — <why>` · `#<number> answer: <your answer>`',
+      '',
+    );
+  } else if (m.config.requestReport) {
     out.push(
       '## When you are done',
       '',

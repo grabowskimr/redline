@@ -10,6 +10,8 @@ import { SessionWatcher } from '../claude/sessionWatcher';
 import { isNoteComment } from '../comments/noteComment';
 
 export interface Deps {
+  /** The hook's push channel, when it is available — used to tell whether the agent is busy. */
+  signals?: { running: boolean };
   context: vscode.ExtensionContext;
   config: Config;
   logger: Logger;

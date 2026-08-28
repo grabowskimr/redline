@@ -87,6 +87,31 @@ run you were reading out of reach. Both sides come from snapshots rather than fr
 working tree has moved on, and showing today's file beside that run's starting point would
 attribute everything since to it.
 
+## Approving what changed
+
+Claude reporting a note as finished is a claim about the code, not a verdict on it — so the note
+moves to **waiting for approval** rather than closing itself. Its before and after stay on the
+card, and two buttons answer it without typing: 👍 closes the note, 👎 reopens it and opens the
+follow-up box.
+
+With the plugin installed the outcomes arrive as a file rather than as prose. The prompt names a
+path and asks for JSON; Redline reads that and falls back to scanning the reply for `#12 done`
+lines only when there is no file. Reading outcomes out of prose is what produced "0 of 3
+addressed" with all three addressed.
+
+## While it is working
+
+The last run's changes appear in the editor gutter, beside the git extension's own marks. Those
+answer "what is uncommitted", which in a worktree an agent has worked in for an hour is nearly
+everything; these answer "what did the last run change in the file I am looking at".
+
+The panel says what the session is working on as it goes — the file it is writing, and how many
+it has touched — taken from the plugin's own record rather than from the session. A terminal in
+another window shows this and the panel could not.
+
+Sending while Claude is mid-turn offers to wait: notes dropped into the middle of a turn are as
+likely to be ignored as read, and queued ones go the moment the run ends.
+
 ## When you are done
 
 Reply with one line per note so I can track it, using exactly this format:
@@ -302,6 +327,7 @@ finishes while VS Code is open pings you with the diff.
 | `redline.onRunFinished` | `notify` | When a run ends: `notify`, `reveal` the panel, `open` the diff, or `nothing` |
 | `redline.excludeGlobs` | `node_modules`, `dist`, `*.min.*`, `.git` | No `+` in these files |
 | `redline.maxFileLines` | `50000` | No `+` in files longer than this |
+| `redline.runGutter` | `true` | Mark the last run's changes in the editor gutter |
 | `redline.showStatusBar` | `true` | Note and changed-file counts in the status bar |
 | `redline.lastRunGapMinutes` | `15` | Idle gap that separates one run's changes from the last |
 | `redline.trace` | `errors` | Output-channel verbosity |

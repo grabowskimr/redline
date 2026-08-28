@@ -3,6 +3,8 @@ import { GitContext, renderBatch, RenderOptions, SnippetSource } from './renderB
 import { ReviewNote } from '../model/note';
 import { hashSnippet, resolveAnchor, snippetAt } from '../anchor/anchorService';
 import { Deps } from '../commands/deps';
+import { deliveryToken } from '../claude/handover';
+import { reportPath } from '../claude/reportFile';
 import { uriForNote } from '../comments/uriMapping';
 
 /** Reads current file text for snippet extraction: open documents first, then disk. */
@@ -77,6 +79,13 @@ export async function renderNotes(
   const git = await gitContext(deps, notes);
   const opts: RenderOptions = { config: deps.config.renderConfig(), source, ...extra };
   if (git) opts.git = git;
+  // Only worth asking for when the plugin is here to have written the directory: the path is
+  // its state directory, and pointing at one that does not exist invites a mkdir nobody asked
+  // for. An explicit value wins, so a caller can suppress it.
+  if (opts.reportPath === undefined) {
+    const root = await deps.range.repoRoot();
+    if (root && (await deliveryToken(root)) !== undefined) opts.reportPath = reportPath(root);
+  }
   return renderBatch(notes, opts);
 }
 

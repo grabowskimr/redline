@@ -62,3 +62,43 @@ describe('hook attribution log', () => {
     assert.deepEqual([...(paths ?? [])], ['src/a.ts']);
   });
 });
+
+describe('what the run has touched so far', () => {
+  let home: string;
+  const repo = '/tmp/live/repo';
+
+  const log = (lines: Array<Record<string, unknown>>): Promise<void> =>
+    fs.writeFile(touchedLogPath(repo, home), lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+
+  beforeEach(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'lr-live-'));
+    await fs.mkdir(path.dirname(touchedLogPath(repo, home)), { recursive: true });
+  });
+  afterEach(async () => {
+    await fs.rm(home, { recursive: true, force: true });
+  });
+
+  it('names the file most recently written, which is what the panel shows', async () => {
+    // The session's own terminal shows this; the panel had nothing to say between "a run
+    // started" and "a run finished".
+    const at = (ms: number): string => new Date(Date.now() - ms).toISOString();
+    await log([
+      { at: at(3000), session: 's', file: `${repo}/src/first.ts`, via: 'edit' },
+      { at: at(2000), session: 's', file: `${repo}/src/second.ts`, via: 'edit' },
+      { at: at(1000), session: 's', file: `${repo}/src/second.ts`, via: 'edit' },
+    ]);
+    const entries = (await touchedSince(repo, Date.now() - 10_000, home)) ?? [];
+    assert.equal(entries[entries.length - 1]?.file, `${repo}/src/second.ts`, 'the newest write');
+    assert.equal(new Set(entries.map((e) => e.file)).size, 2, 'two distinct files this run');
+  });
+
+  it('leaves out what an earlier run touched', async () => {
+    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+    await log([
+      { at: old, session: 's', file: `${repo}/src/old.ts`, via: 'edit' },
+      { at: new Date().toISOString(), session: 's', file: `${repo}/src/now.ts`, via: 'edit' },
+    ]);
+    const entries = (await touchedSince(repo, Date.now() - 60_000, home)) ?? [];
+    assert.deepEqual(entries.map((e) => e.file), [`${repo}/src/now.ts`]);
+  });
+});

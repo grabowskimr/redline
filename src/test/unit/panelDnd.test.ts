@@ -428,7 +428,9 @@ describe('rendering a card', () => {
       id: 'n1', seq: 1, body: 'x', done: true,
       sent: { changed: true, outcome: 'answered' }, attachments: [],
     });
-    assert.match(html, /codicon-pass-filled[^>]*><\/span> done/, "your decision, not the agent's verdict");
+    // "approved" now: your decision is the one that closes a note, and the word says whose it
+    // was. The agent's own verdict reads as "waiting for approval" until you agree.
+    assert.match(html, /codicon-pass-filled[^>]*><\/span> approved/, "your decision, not the agent's verdict");
     assert.match(html, /class="card done settled/, 'dimmed and collapsed');
     assert.match(html, /data-act="remove"/, 'and removable in one click');
   });
@@ -716,5 +718,55 @@ describe('a note pointing at something that is gone', () => {
     assert.doesNotMatch(html, /class="where gone"/);
     assert.doesNotMatch(html, /class="where stale"/);
     assert.match(html, /Open in editor/);
+  });
+});
+
+describe('approving what Claude changed', () => {
+  const render = (note: Record<string, unknown>): string => {
+    const h = harness();
+    h.fire('message', {
+      data: {
+        type: 'notes',
+        groups: [{ base: 'a.ts', dir: 'src', notes: [{ kind: 'comment', kindIcon: 'comment', where: 'L1', ...note }] }],
+        sent: [],
+        kinds: [],
+      },
+    });
+    return h.root.innerHTML;
+  };
+
+  it('says a note is waiting for you, not that it is finished', () => {
+    // Claude reporting a note as done is a claim about the code, not a verdict on it.
+    const html = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: true, outcome: 'done' } });
+    assert.match(html, /waiting for approval/);
+    assert.doesNotMatch(html, />\s*done</);
+  });
+
+  it('offers the two answers that need no typing', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: true, outcome: 'done' } });
+    assert.match(html, /data-act="approve"/);
+    assert.match(html, /data-act="needswork"/);
+    assert.doesNotMatch(html, /data-act="done"/, 'not two ways to close the same note');
+  });
+
+  it('calls it approved once you have said so', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'x', done: true, sent: { changed: true, outcome: 'done' } });
+    assert.match(html, /approved/);
+    assert.match(html, /data-act="reopen"/);
+    assert.doesNotMatch(html, /data-act="approve"/);
+  });
+
+  it('leaves a note Claude has not answered alone', () => {
+    const html = render({ id: 'n1', seq: 1, body: 'x', sent: { changed: false } });
+    assert.match(html, /not addressed yet/);
+    assert.match(html, /data-act="done"/, 'still closable by hand');
+    assert.doesNotMatch(html, /data-act="approve"/);
+  });
+
+  it('waits for the reply to go before asking for approval again', () => {
+    const html = render({
+      id: 'n1', seq: 1, body: 'x', pendingReply: true, sent: { changed: true, outcome: 'done' },
+    });
+    assert.doesNotMatch(html, /data-act="approve"/, 'the conversation is live again');
   });
 });

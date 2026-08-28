@@ -76,6 +76,8 @@ interface SessionInfo {
   totalFiles?: number;
   /** The file list could not be read — the panel must not render this as "nothing changed". */
   changesUnavailable?: boolean;
+  /** Notes waiting for the agent to finish before they go. */
+  queued?: number;
 }
 
 interface InboundMessage {
@@ -196,6 +198,13 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   /** Best-effort: spawns git/ps. Never blocks or breaks the notes rendering. */
+  /** What the session is doing right now, pushed as the hook reports it. */
+  postActivity(activity: { running: boolean; file?: string; files?: number }): void {
+    const view = this.view;
+    if (!view?.visible) return;
+    void view.webview.postMessage({ type: 'activity', activity });
+  }
+
   async postSession(): Promise<void> {
     const view = this.view;
     if (!view?.visible) return;
@@ -211,6 +220,9 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       // the view went away between the check and the post
     }
   }
+
+  /** How many notes are waiting for Claude to be free, from whatever knows. */
+  queuedCount: () => number = () => 0;
 
   private async sessionInfo(): Promise<SessionInfo> {
     let label = this.watcher?.label ?? '';
@@ -231,6 +243,10 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       label: label || this.lastSessionLabel,
       state: this.sessionState(),
     };
+    // A batch held until the agent is free is a state with no other sign of itself: the
+    // status-bar message that announced it is gone within seconds, and the notes look unsent.
+    const queued = this.queuedCount();
+    if (queued > 0) info.queued = queued;
     const summary = await this.range?.summary();
     if (summary) {
       // The strip advertises the last run; everything else is behind "Review All Changes".

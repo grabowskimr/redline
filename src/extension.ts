@@ -10,6 +10,8 @@ import { emptyState } from './model/schema';
 import { isOpen, ReviewNote } from './model/note';
 import { GitService } from './git/gitApi';
 import { registerEmptySideProvider, ReviewRange } from './git/reviewRange';
+import { RunGutter } from './git/runGutter';
+import { LiveActivity } from './claude/liveActivity';
 import { sweepScratchIndexes } from './git/snapshotTree';
 import { registerTreeSideProvider } from './git/treeSide';
 import { CommentHost } from './comments/commentHost';
@@ -149,6 +151,9 @@ async function activateInner(
   const index = new NoteIndex(store);
   const host = new CommentHost(store, config, logger, context);
   const range = new ReviewRange(store, logger, git);
+  // Gutter marks for the run's own changes, beside the git extension's marks against HEAD.
+  const gutter = new RunGutter(range, () => config.runGutter);
+  context.subscriptions.push(gutter, config.onDidChange(() => gutter.sync()));
   const attachments = new Attachments(context, store, logger);
   const watcher = new SessionWatcher(logger);
   context.subscriptions.push(index, host, range, watcher, registerEmptySideProvider(), registerTreeSideProvider(gitIn, () => range.repoRoot()));
@@ -224,7 +229,7 @@ async function activateInner(
     'redline.revealNote': notes.revealNote,
     'redline.reanchorNote': notes.reanchorNote,
     'redline.reviseNote': notes.reviseNote,
-    'redline.submit': batch.submit,
+    'redline.submit': () => batch.submit(),
     'redline.sendSelected': batch.sendSelected,
     'redline.previewBatch': batch.previewBatch,
     'redline.copyNote': batch.copyNote,
@@ -241,6 +246,9 @@ async function activateInner(
     'redline.clearBaseline': batch.clearBaseline,
     'redline.refresh': batch.refresh,
     'redline.followUpHere': notes.followUpHere,
+    'redline.approveNote': notes.approveNote,
+    'redline.cancelQueued': batch.cancelQueued,
+    'redline.needsWork': notes.needsWork,
     'redline.reviewPreviousRun': batch.reviewPreviousRun,
     'redline.setUpHook': () => setUpHook(context, logger),
     'redline.showLog': batch.showLog,
@@ -263,6 +271,14 @@ async function activateInner(
   void HookSignals.ensureDirectory();
   const signals = new HookSignals(logger);
   cards.signals = signals;
+  // What the session is working on, from the hook's own record of what it writes. A terminal
+  // in another window shows this and the panel could not.
+  const live = new LiveActivity(signals, range);
+  context.subscriptions.push(live, live.onDidChange((a) => cards.postActivity(a)));
+  // Late, because the signal channel is created after the commands are: a batch queued while
+  // Claude is working needs to know that it is, and the hook is the only thing that knows.
+  deps.signals = signals;
+  cards.queuedCount = () => (batch.isQueued() ? (store?.notes.filter(isOpen).length ?? 0) : 0);
   // Assigned once the session monitor below exists. A hook signal can only arrive from a
   // file watcher, so never during activation — but relying on that from fifty lines away is
   // not something a later edit should have to know.
@@ -293,7 +309,11 @@ async function activateInner(
       //
       // Caught rather than voided: this runs from a file watcher, so a rejection has nowhere
       // to go and would surface as an extension error with no context about what caused it.
-      batch.onHookRunFinished().catch((err) => logger.warn('could not report the finished run', err));
+      // Also the moment a queued batch has been waiting for.
+      batch
+        .onHookRunFinished()
+        .then(() => batch.flushQueued())
+        .catch((err) => logger.warn('could not report the finished run', err));
     }),
   );
   const attachMonitor = async (): Promise<void> => {

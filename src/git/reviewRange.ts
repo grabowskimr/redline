@@ -1212,6 +1212,19 @@ export class ReviewRange implements vscode.Disposable {
   }
 
   /**
+   * What the last run is being compared against, for anything that wants to show the run's
+   * changes itself — the editor gutter, for one.
+   *
+   * Only what has already been computed for the panel: this is asked for every file that
+   * opens, so it must not start any work of its own.
+   */
+  runComparison(): { root: string; before: string; statuses: ReadonlyMap<string, ChangeStatus> } | undefined {
+    const trees = this.treeState;
+    if (!trees || !this.root || this.runStatuses.size === 0) return undefined;
+    return { root: this.root, before: trees.before, statuses: this.runStatuses };
+  }
+
+  /**
    * Runs that have already finished, newest first.
    *
    * Sending a follow-up moves the boundary, and until now that put the run before it out of
