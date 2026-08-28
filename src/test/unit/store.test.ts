@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { input, makeStore } from './fixtures';
-import { hasUnsentReply, isOnDeck, isOpen } from '../../model/note';
+import { hasUnsentReply, isOnDeck, isOpen, ReviewNote } from '../../model/note';
 
 import { StoreChange } from '../../store/reviewStore';
 
@@ -334,5 +334,46 @@ describe('marking a note done', () => {
     note = store.getById(a.id)!;
     store.update(note.id, { addenda: [...note.addenda, 'actually, one more thing'] });
     assert.equal(hasUnsentReply(store.getById(a.id)!), true, 'the conversation is live again');
+  });
+});
+
+describe('sending a note again mid-thread', () => {
+  it('keeps the notes being re-sent out of the archive sweep', () => {
+    // Sending a second round archives the previous one — but a note carrying a follow-up is
+    // *in* that round, and archiving it would delete the thing the follow-up is attached to.
+    const store = makeStore();
+    const answered = store.add(input({ body: 'remove this comment' }));
+    const stale = store.add(input({ body: 'something else entirely' }));
+    store.markSent([answered.id, stale.id]);
+
+    const cleared = store.clearSent([answered.id]);
+    assert.equal(cleared, 1, 'only the note with nothing pending was archived');
+    assert.deepEqual(
+      store.notes.map((n: ReviewNote) => n.id),
+      [answered.id],
+      'the one being replied to survives',
+    );
+    assert.equal(store.archive[0]?.notes.length, 1);
+  });
+
+  it('archives the whole round when nothing is being re-sent', () => {
+    const store = makeStore();
+    const a = store.add(input({ body: 'one' }));
+    const b = store.add(input({ body: 'two' }));
+    store.markSent([a.id, b.id]);
+    assert.equal(store.clearSent(), 2);
+    assert.deepEqual(store.notes, []);
+  });
+
+  it('marks a re-sent note as sent again, so the follow-up stops counting', () => {
+    const store = makeStore();
+    const n = store.add(input({ body: 'remove this comment' }));
+    store.markSent([n.id]);
+    store.update(n.id, { addenda: ['Claude: removed it', 'not quite — the other one too'] });
+    assert.ok(hasUnsentReply(store.getById(n.id) as ReviewNote), 'a follow-up is waiting');
+
+    store.markSent([n.id]);
+    assert.equal(hasUnsentReply(store.getById(n.id) as ReviewNote), false, 'and is no longer waiting');
+    assert.equal(store.getById(n.id)?.sent?.addendaAtSend, 2);
   });
 });

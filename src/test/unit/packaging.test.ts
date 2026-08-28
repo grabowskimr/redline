@@ -9,7 +9,18 @@ import * as path from 'node:path';
  */
 describe('what gets published', () => {
   const root = path.resolve(__dirname, '../../..');
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as Record<string, any>;
+  interface Manifest {
+    repository?: { url?: string };
+    bugs?: { url?: string };
+    homepage?: string;
+    categories?: string[];
+    license?: string;
+    icon?: string;
+    displayName?: string;
+    capabilities?: { untrustedWorkspaces?: { supported?: string; description?: string } };
+    contributes?: { configuration?: { properties?: Record<string, unknown> } };
+  }
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as Manifest;
   const ignore = fs.readFileSync(path.join(root, '.vscodeignore'), 'utf8').split('\n').map((l) => l.trim());
 
   it('points at a repository that exists', () => {

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.0 — 2026-08-28
+
+**A second round can be sent in one go.** Sending a batch, reading the answers and replying to
+several notes is the ordinary way this gets used — and there was no way to send that second
+round at once. The batch send is gated on having notes *waiting to go*, and once a round has
+been sent nothing is waiting, so the button disappeared. Replies could only be sent one card at
+a time.
+
+- The **send** button returns as soon as any follow-up is written, and sends every one of them
+  in a single message alongside any new notes.
+- The *Sent to Claude* section grows a **send N follow-ups** button next to *clear sent*, which
+  is where those replies were written.
+- Each follow-up carries its whole thread — the note, Claude's answer, your reply — so it
+  arrives knowing what it is replying to.
+- The batch goes to the session the conversation already lives in, with no chooser, unless the
+  notes span two sessions or that session is gone.
+- Sending a second round no longer archives the notes it is replying to. `clearSent` sweeps the
+  previous round into the archive, and a note carrying a follow-up is *in* that round — so this
+  would have deleted the very thing the reply was attached to.
+
 ## 1.0.1 — 2026-08-28
 
 - Fixed: a file the run put *back* to its committed state was missing from **Last**. Asking

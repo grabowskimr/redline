@@ -68,6 +68,17 @@ Code:
 ```
 User comment: "Why return early here rather than falling through to the tax step?"
 
+## A second round
+
+Send a batch, read the answers, reply to the ones that need more — then send **all** of those
+follow-ups in one message, the same way you sent the first round. The **send** button in the
+toolbar comes back as soon as any follow-up is waiting, and the *Sent to Claude* section grows
+a **send N follow-ups** button beside *clear sent*.
+
+Each follow-up carries its own thread — the note, Claude's answer, your reply — so it lands
+with the context it is replying to, and the whole batch goes to the session that conversation
+already lives in, without asking you which one.
+
 ## When you are done
 
 Reply with one line per note so I can track it, using exactly this format:

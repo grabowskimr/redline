@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { locationForUri, noteKey } from '../comments/uriMapping';
-import { compareByPathThenLine, isOnDeck, isOpen, ReviewNote } from '../model/note';
+import { compareByPathThenLine, hasUnsentReply, isOnDeck, isOpen, ReviewNote } from '../model/note';
 import { ReviewStore } from '../store/reviewStore';
 
 /**
@@ -84,6 +84,13 @@ export class NoteIndex implements vscode.Disposable {
     await Promise.all([
       // Done-but-unsent notes still need Clear All and the rest of the view menu.
       vscode.commands.executeCommand('setContext', 'redline.hasNotes', notes.some(isOnDeck)),
+      // Anything to send, which is not the same as anything on deck: a follow-up written on a
+      // note that has already been answered is sendable while nothing is waiting to go.
+      vscode.commands.executeCommand(
+        'setContext',
+        'redline.canSend',
+        notes.some((n) => isOpen(n) || hasUnsentReply(n)),
+      ),
       vscode.commands.executeCommand('setContext', 'redline.hasSent', notes.some((n) => !!n.sent)),
       vscode.commands.executeCommand('setContext', 'redline.hasArchive', this.store.hasArchive),
     ]);

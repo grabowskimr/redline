@@ -540,3 +540,42 @@ describe('panel iconography', () => {
     assert.match(html, /codicon-pass-filled/, 'and says so with an icon');
   });
 });
+
+describe('sending a second round', () => {
+  /** Renders the sent section, which is where a follow-up is written and sent from. */
+  const renderSent = (sent: Array<Record<string, unknown>>): string => {
+    const h = harness();
+    h.fire('message', { data: { type: 'notes', groups: [], sent, kinds: [] } });
+    return h.root.innerHTML;
+  };
+
+  const answered = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'n1',
+    seq: 1,
+    kind: 'comment',
+    kindIcon: 'comment',
+    where: 'L1',
+    body: 'remove this comment',
+    sent: { changed: false, outcome: 'done' },
+    ...over,
+  });
+
+  it('offers to send every follow-up at once', () => {
+    // The reported gap: after a round is answered you reply to several notes, and the only
+    // way to send them was one card at a time — the batch send had disappeared with the last
+    // unsent note.
+    const html = renderSent([answered({ pendingReply: true }), answered({ id: 'n2', seq: 2, pendingReply: true })]);
+    assert.match(html, /data-global="redline\.submit"/, 'a send action in the sent section');
+    assert.match(html, /send 2 follow-ups/);
+  });
+
+  it('counts one follow-up in the singular', () => {
+    assert.match(renderSent([answered({ pendingReply: true }), answered({ id: 'n2', seq: 2 })]), /send 1 follow-up</);
+  });
+
+  it('says nothing when every answer has been read and left alone', () => {
+    const html = renderSent([answered(), answered({ id: 'n2', seq: 2 })]);
+    assert.doesNotMatch(html, /data-global="redline\.submit"/);
+    assert.match(html, /clear sent/, 'the section is still there');
+  });
+});

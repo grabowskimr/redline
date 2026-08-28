@@ -432,8 +432,21 @@
     if (state.sent.length) {
       const addressed = state.sent.filter((n) => n.sent && (n.sent.outcome || n.sent.changed)).length;
       html += '<h3>Sent to Claude — ' + addressed + '/' + state.sent.length + ' addressed</h3>';
+      // Follow-ups written since the last send. The toolbar's send button covers these too,
+      // but this is where they were written, and a second round is the normal way this gets
+      // used — reading the answers, replying to several, sending them together.
+      var waiting = state.sent.filter(function (n) { return n.pendingReply; }).length;
       html +=
         '<div class="sentbar">' +
+        (waiting
+          ? '<button class="primary" data-global="redline.submit" title="Send every follow-up you have written, in one message">' +
+            icon('send') +
+            ' send ' +
+            waiting +
+            ' follow-up' +
+            (waiting === 1 ? '' : 's') +
+            '</button>'
+          : '') +
         '<button data-global="redline.clearSent" title="Archive these and clear the section">✓ clear sent</button>' +
         '</div>';
       html += state.sent.map(card).join('');

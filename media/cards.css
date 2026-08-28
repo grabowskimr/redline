@@ -611,3 +611,12 @@ h3 {
   color: var(--vscode-charts-blue);
   opacity: 1;
 }
+
+/* The follow-up send sits beside "clear sent", and is the action of the two that matters. */
+.sentbar .primary {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+.sentbar .primary:hover {
+  background: var(--vscode-button-hoverBackground);
+}

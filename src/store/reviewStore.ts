@@ -267,8 +267,16 @@ export class ReviewStore implements Disposable {
   }
 
   /** Archive and remove every sent note (the previous round) — returns how many. */
-  clearSent(): number {
-    const sent = this.state.active.notes.filter((n) => n.sent);
+  /**
+   * Archive the sent round and clear it.
+   *
+   * `except` keeps notes that are being sent *again* — a follow-up on an answered note is
+   * still that note's conversation, so archiving it mid-thread would delete the thing the
+   * reply is attached to.
+   */
+  clearSent(except: readonly string[] = []): number {
+    const keep = new Set(except);
+    const sent = this.state.active.notes.filter((n) => n.sent && !keep.has(n.id));
     if (sent.length === 0) return 0;
     const batch: Batch = {
       id: newId(),

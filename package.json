@@ -2,7 +2,7 @@
   "name": "redline",
   "displayName": "Redline",
   "description": "Review Claude Code's work — inline notes on the lines that need changes, handed back as one prompt.",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "publisher": "marcin",
   "license": "MIT",
   "repository": {
@@ -437,7 +437,7 @@
       "view/title": [
         {
           "command": "redline.submit",
-          "when": "view == redline.cards && redline.hasNotes",
+          "when": "view == redline.cards && redline.canSend",
           "group": "navigation@1"
         },
         {
@@ -452,7 +452,7 @@
         },
         {
           "command": "redline.previewBatch",
-          "when": "view == redline.cards && redline.hasNotes",
+          "when": "view == redline.cards && redline.canSend",
           "group": "navigation@4"
         },
         {

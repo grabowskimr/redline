@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AGENT_TURN_PREFIX, isOpen, ReviewNote } from '../model/note';
+import { AGENT_TURN_PREFIX, hasUnsentReply, isOpen, ReviewNote } from '../model/note';
 import { copyToClipboard, currentHashes, openPreview, renderNotes } from '../export/submit';
 import { parseReport } from '../export/report';
 import { pickTarget, readTarget, resolveTarget, sendBatchToClaude, SessionTarget, targetByKey } from '../claude/claudeSession';
@@ -53,26 +53,37 @@ export function batchCommands(deps: Deps) {
    */
   async function submit(): Promise<void> {
     const open = store.notes.filter(isOpen);
-    if (open.length === 0) {
+    // Follow-ups written on notes that have already been answered. Sending a round, reading
+    // the answers and replying to several of them is the ordinary way this gets used, and
+    // there was no way to send that second round in one go — only note by note.
+    const replies = store.notes.filter(hasUnsentReply);
+    const batch = [...open, ...replies];
+    if (batch.length === 0) {
       void vscode.window.showInformationMessage('Redline: no notes to send — add one first.');
       return;
     }
+    const ids = batch.map((n) => n.id);
     // Rendering reads every referenced file and finding the session shells out to `ps` and
     // the Orca CLI, so this is where the wait is. Report it before the dialog appears.
     const prepared = await progress('finding the Claude Code session…', async () => ({
-      text: await renderNotes(deps, store.notes),
-      target: await resolveTarget(deps.context, logger),
+      // `includeInactive`, and named explicitly: a note that has been answered is not open,
+      // and the reply needs the whole thread — the note, the answer and the follow-up — or it
+      // arrives with no idea what it is replying to.
+      text: await renderNotes(deps, store.notes, { onlyIds: ids, includeInactive: true }),
+      target: await targetForBatch(replies),
     }));
     const text = prepared.text;
     const target = prepared.target;
-    const fileCount = new Set(open.map((n) => n.path)).size;
+    const fileCount = new Set(batch.map((n) => n.path)).size;
 
     if (config.confirmOnSubmit) {
       const questions = open.filter((n) => n.kind === 'question').length;
-      const shots = open.reduce((sum, n) => sum + (n.attachments?.length ?? 0), 0);
+      const shots = batch.reduce((sum, n) => sum + (n.attachments?.length ?? 0), 0);
+      const requests = open.length - questions;
       const detail = [
-        `${open.length - questions} change request${open.length - questions === 1 ? '' : 's'}`,
+        requests ? `${requests} change request${requests === 1 ? '' : 's'}` : '',
         questions ? `${questions} question${questions === 1 ? '' : 's'}` : '',
+        replies.length ? `${replies.length} follow-up${replies.length === 1 ? '' : 's'}` : '',
         shots ? `${shots} screenshot${shots === 1 ? '' : 's'}` : '',
         `${fileCount} file${fileCount === 1 ? '' : 's'}`,
       ]
@@ -84,7 +95,7 @@ export function batchCommands(deps: Deps) {
           ? 'No session VS Code can type into. Stages the batch for the Claude Code plugin — you type one short word to deliver it.'
           : 'Copies to the clipboard (no Claude Code session found).';
       const choice = await vscode.window.showInformationMessage(
-        `Send ${summary(open.length, fileCount)} to Claude Code?`,
+        `Send ${summary(batch.length, fileCount)} to Claude Code?`,
         { modal: true, detail: `${detail}\n\n${where}` },
         'Send',
         'Preview first',
@@ -93,7 +104,7 @@ export function batchCommands(deps: Deps) {
       if (choice === 'Preview first') {
         await openPreview(text, config.outputTemplate === 'json' ? 'json' : 'markdown');
         const again = await vscode.window.showInformationMessage(
-          `Send ${summary(open.length, fileCount)}?`,
+          `Send ${summary(batch.length, fileCount)}?`,
           { modal: true },
           'Send',
         );
@@ -112,11 +123,14 @@ export function batchCommands(deps: Deps) {
         : undefined,
     );
 
-    // Previous round rolls into the archive; this round becomes "sent".
-    store.clearSent();
-    const ids = open.map((n) => n.id);
+    // Previous round rolls into the archive; this round becomes "sent". The notes being sent
+    // again are held back from that: archiving a note mid-thread would delete the very thing
+    // its follow-up is attached to.
+    store.clearSent(ids);
     store.archiveCopy();
-    store.markSent(ids, result?.ok ? result.target?.key : undefined, await currentHashes(open));
+    // A fresh send clears the previous verdict — the note is waiting on the agent again.
+    for (const n of replies) store.update(n.id, { done: false });
+    store.markSent(ids, result?.ok ? result.target?.key : undefined, await currentHashes(batch));
     for (const id of ids) index.clearChangedSinceSent(id);
     if (result?.ok && result.target) startWatch(result.target);
 
@@ -126,7 +140,7 @@ export function batchCommands(deps: Deps) {
       await vscode.env.clipboard.writeText(staged);
       void vscode.window
         .showInformationMessage(
-          `Redline: ${summary(open.length, fileCount)} staged for Claude Code. ` +
+          `Redline: ${summary(batch.length, fileCount)} staged for Claude Code. ` +
             `Type \`${staged}\` in your session to deliver it.`,
           'Copy the word again',
         )
@@ -138,7 +152,7 @@ export function batchCommands(deps: Deps) {
 
     const tail = result?.ok ? ` ${result.message}` : result ? ` (${result.message})` : '';
     void vscode.window
-      .showInformationMessage(`Copied ${summary(open.length, fileCount)} to the clipboard.${tail}`, 'Undo')
+      .showInformationMessage(`Copied ${summary(batch.length, fileCount)} to the clipboard.${tail}`, 'Undo')
       .then((choice) => {
         if (choice === 'Undo') store.updateMany(ids.map((id) => ({ id, patch: { sent: undefined } })));
       });
@@ -173,6 +187,22 @@ export function batchCommands(deps: Deps) {
     if (still) return still;
     logger.info(`the session #${note.seq} was sent to is gone; choosing another`);
     return undefined;
+  }
+
+  /**
+   * The session a batch should go to.
+   *
+   * A follow-up only makes sense in the session that holds the conversation, so when every
+   * note being replied to names the same one, that session is used and no chooser appears.
+   * A batch spanning two sessions, or one with nothing to go on, resolves as usual.
+   */
+  async function targetForBatch(replies: readonly ReviewNote[]): Promise<SessionTarget | undefined> {
+    const keys = new Set(replies.map((n) => n.sent?.target).filter((k): k is string => !!k));
+    const only = keys.size === 1 ? [...keys][0] : undefined;
+    const bound = only ? await targetByKey(only, logger) : undefined;
+    if (bound) return bound;
+    if (only) logger.info('the session these notes are talking to is gone; choosing another');
+    return resolveTarget(deps.context, logger);
   }
 
   /** Send a single note (the ➤ button on a card). */
