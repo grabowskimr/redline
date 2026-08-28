@@ -481,6 +481,39 @@ describe('a card', () => {
     assert.doesNotMatch(html, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u, 'no emoji');
   });
 
+  it('shows the follow-up you wrote, and offers to send it', () => {
+    // It went into the store and appeared nowhere: the card looked as though the words had
+    // been thrown away, and the only sign anything had happened was the button changing.
+    const html = render(
+      answered('Removed it.', {
+        pendingReply: true,
+        addenda: ['Claude: Removed it.', 'not quite — the other one too'],
+        sent: { changed: true, outcome: 'done', seenTurns: 1 },
+      }),
+    );
+    assert.match(html, /not quite — the other one too/, 'your words are on the card');
+    assert.match(html, /You · follow-up|You &#183; follow-up/);
+    assert.match(html, /not sent yet/, 'and marked as unsent');
+    assert.match(html, /data-act="send"[^>]*>Send your reply</);
+    assert.ok(
+      html.indexOf('Removed it.') < html.indexOf('not quite'),
+      'in the order the conversation happened',
+    );
+  });
+
+  it('keeps the whole exchange, not just the newest turn', () => {
+    const html = render(
+      answered('First attempt.', {
+        addenda: ['Claude: First attempt.', 'try again', 'Claude: Second attempt.'],
+        sent: { changed: true, outcome: 'done', seenTurns: 3 },
+      }),
+    );
+    for (const turn of ['First attempt.', 'try again', 'Second attempt.']) {
+      assert.match(html, new RegExp(turn.replace('.', '\\.')), `${turn} is on the card`);
+    }
+    assert.doesNotMatch(html, /not sent yet/, 'all of it has gone');
+  });
+
   it('offers to send a reply that has been written but not sent', () => {
     const html = render(answered('Done.', { pendingReply: true, addenda: ['Claude: Done.', 'not quite'] }));
     assert.match(html, /data-act="send"[^>]*>Send your reply</);

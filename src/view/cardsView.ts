@@ -57,7 +57,7 @@ interface CardData {
   /** The file the note points at is no longer on disk. */
   missing?: boolean;
   attachments: Array<{ src: string; path: string; name: string; caption: string; followUp: boolean }>;
-  sent?: { outcome?: string; reply?: string; changed: boolean };
+  sent?: { outcome?: string; reply?: string; changed: boolean; seenTurns?: number };
   /** A reply is written but not sent: the card stays active and offers ➤. */
   pendingReply?: boolean;
   /** Sent, and Claude has not reported on it yet. */
@@ -358,6 +358,9 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (n.sent) {
       const changed = this.index.changedSinceSent(n.id);
       c.sent = { changed };
+      // Turns written after this are yours and Claude has not seen them — the card marks
+      // them, and they are what the send button on it would send.
+      if (typeof n.sent.addendaAtSend === 'number') c.sent.seenTurns = n.sent.addendaAtSend;
       if (n.sent.outcome) c.sent.outcome = n.sent.outcome;
       if (n.sent.reply) c.sent.reply = n.sent.reply;
     }

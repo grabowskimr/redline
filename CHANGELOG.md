@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.3 — 2026-08-28
+
+- Fixed: **a follow-up you wrote appeared nowhere on the card.** It was kept, and the button
+  changed to *Send your reply*, but the words themselves were only ever rendered in the rejected
+  state — so on every other card it looked as though they had been thrown away.
+- The card shows **the whole exchange** now, in the order it happened, rather than Claude's
+  newest turn alone. Reading back over a conversation is most of what a card is for once it has
+  been round more than once.
+- A turn Claude has not seen is marked **not sent yet**, so a written follow-up cannot be
+  mistaken for a sent one.
+- The follow-up box stays while the conversation is live, not only while a card is waiting for
+  approval: after writing one follow-up you usually want another.
+
 ## 1.5.2 — 2026-08-28
 
 - Fixed: **the ⋯ menu rendered as a list of words under the last card.** Its rules went with the

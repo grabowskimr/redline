@@ -220,46 +220,46 @@
     return '<pre class="snip" data-act="reveal" title="Open in the editor">' + rows + '</pre>';
   }
 
-  /** Claude's turn: what it changed, or what it answered. */
-  function claudeBlock(n, dimmed) {
-    const said = latestAgentTurn(n);
-    if (!said) return '';
-    const label = n.sent && n.sent.outcome === 'answered' ? "Claude's answer" : "Claude's change";
-    return (
-      '<div class="block claude' + (dimmed ? ' dim' : '') + '">' +
-      '<span class="block-label">' + label + '</span>' +
-      '<div class="block-body">' + inlineMarkdown(said) + '</div>' +
-      '</div>'
-    );
-  }
+  /**
+   * The exchange, in the order it happened.
+   *
+   * Every turn, not just the newest. A follow-up written after Claude answered went into the
+   * store and appeared nowhere, so the card looked as though the words had been thrown away —
+   * and reading back over the conversation is most of what a card is for once it has been
+   * round more than once.
+   */
+  function threadBlocks(n, dimClaude) {
+    const turns = (n.addenda || []).slice();
+    // A report can arrive as an outcome with no turn behind it; that is still Claude speaking.
+    if (!turns.some(isAgentTurn) && n.sent && n.sent.reply) turns.unshift(AGENT_PREFIX + ' ' + n.sent.reply);
+    const seen = n.sent && typeof n.sent.seenTurns === 'number' ? n.sent.seenTurns : turns.length;
 
-  /** The reason a change was turned down — your words, kept beside the answer they refuse. */
-  function rejectionBlock(n) {
-    const why = latestOwnTurn(n);
-    if (!why) return '';
-    return (
-      '<div class="block reject">' +
-      '<span class="block-label">You · rejected</span>' +
-      '<div class="block-body">' + inlineMarkdown(why) + '</div>' +
-      '</div>'
-    );
-  }
-
-  /** The newest thing Claude said in the thread. */
-  function latestAgentTurn(n) {
-    const turns = (n.addenda || []).filter(isAgentTurn);
-    const last = turns[turns.length - 1];
-    if (last) return String(last).replace(AGENT_PREFIX, '').trim();
-    return n.sent && n.sent.reply ? n.sent.reply : '';
-  }
-
-  /** The newest thing you said after Claude's last turn. */
-  function latestOwnTurn(n) {
-    const turns = n.addenda || [];
-    for (let i = turns.length - 1; i >= 0; i--) {
-      if (!isAgentTurn(turns[i])) return String(turns[i]).trim();
-    }
-    return '';
+    return turns
+      .map((turn, i) => {
+        const mine = !isAgentTurn(turn);
+        const text = mine ? String(turn).trim() : String(turn).replace(AGENT_PREFIX, '').trim();
+        if (!text) return '';
+        const last = i === turns.length - 1;
+        const unsent = mine && i >= seen;
+        const label = mine
+          ? n.rejected && last
+            ? 'You · rejected'
+            : 'You · follow-up'
+          : n.sent && n.sent.outcome === 'answered'
+            ? "Claude's answer"
+            : "Claude's change";
+        const cls = mine ? (n.rejected && last ? 'reject' : 'follow') : 'claude' + (dimClaude ? ' dim' : '');
+        return (
+          '<div class="block ' + cls + '">' +
+          '<span class="block-label">' +
+          label +
+          (unsent ? '<span class="unsent">not sent yet</span>' : '') +
+          '</span>' +
+          '<div class="block-body">' + inlineMarkdown(text) + '</div>' +
+          '</div>'
+        );
+      })
+      .join('');
   }
 
   /**
@@ -328,14 +328,16 @@
         '</div>' +
         '<div class="folded">' +
         '<div class="say" data-act="reveal" title="Open in the editor">' + esc(n.body) + '</div>' +
-        claudeBlock(n, false) +
+        threadBlocks(n, false) +
         '</div>' +
         '</div>'
       );
     }
 
+    // The box stays while the conversation is live: after writing one follow-up you often
+    // want another, and it is where the ⏎ that sends them lives.
     const followUp =
-      state === 'approve'
+      state === 'approve' || (state === 'waiting' && n.sent)
         ? '<div class="block follow">' +
           '<span class="block-label">You · follow-up</span>' +
           '<div class="ask">' +
@@ -376,8 +378,8 @@
       snippetBlock(n) +
       '<div class="say" data-act="reveal" title="Open in the editor">' + esc(n.body) + '</div>' +
       shotsOf(n, state === 'done', 'note') +
-      claudeBlock(n, state === 'rejected') +
-      (state === 'rejected' ? rejectionBlock(n) + shotsOf(n, true, 'follow-up') : '') +
+      threadBlocks(n, state === 'rejected') +
+      shotsOf(n, state !== 'approve', 'follow-up') +
       followUp +
       actions +
       '</div>'

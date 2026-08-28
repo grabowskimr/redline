@@ -260,6 +260,13 @@ body {
 .block.follow .block-label {
   color: #c9c6c1;
 }
+/* Written, kept, and Claude has not seen it: the card says so rather than looking sent. */
+.block-label .unsent {
+  margin-left: 8px;
+  letter-spacing: 0.06em;
+  color: #d9b169;
+  text-transform: none;
+}
 .block-body {
   font-size: 14px;
   line-height: 1.55;
