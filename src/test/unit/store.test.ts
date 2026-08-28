@@ -377,3 +377,28 @@ describe('sending a note again mid-thread', () => {
     assert.equal(store.getById(n.id)?.sent?.addendaAtSend, 2);
   });
 });
+
+describe('undoing a send', () => {
+  it('puts a re-sent note back to the round it was already in', () => {
+    // Undo used to clear `sent` outright, which was right while a batch could only contain
+    // notes that had never been sent. A note carrying a follow-up has a record worth keeping:
+    // its outcome, the session it is talking to, and how far its thread had got.
+    const store = makeStore();
+    const answered = store.add(input({ body: 'remove this comment' }));
+    store.markSent([answered.id], 'session-a');
+    store.update(answered.id, { addenda: ['Claude: done', 'one more thing'], sent: { ...(store.getById(answered.id)?.sent as NonNullable<ReviewNote['sent']>), outcome: 'done' } });
+    const before = store.getById(answered.id)?.sent;
+
+    const fresh = store.add(input({ body: 'and this one' }));
+    const ids = [fresh.id, answered.id];
+    const wasSent = new Map(ids.map((id) => [id, store.getById(id)?.sent]));
+    store.markSent(ids, 'session-a');
+
+    // The undo the notification offers.
+    store.updateMany(ids.map((id) => ({ id, patch: { sent: wasSent.get(id) } })));
+
+    assert.equal(store.getById(fresh.id)?.sent, undefined, 'the new note goes back to unsent');
+    assert.deepEqual(store.getById(answered.id)?.sent, before, 'the answered one keeps its round');
+    assert.equal(store.getById(answered.id)?.sent?.outcome, 'done');
+  });
+});

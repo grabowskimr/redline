@@ -52,10 +52,15 @@ export function claudePrompt(m: RenderModel): string {
   if (ideas.length) parts.push(`${ideas.length} idea${ideas.length === 1 ? '' : 's'}`);
   if (questions.length) parts.push(`${questions.length} question${questions.length === 1 ? '' : 's'}`);
   if (fyi.length) parts.push(`${fyi.length} FYI`);
+  const exchange = 'The exchange so far is under each note, newest last.';
   out.push(
     m.followUp
-      ? `Following up on feedback you have already worked on: ${parts.join(', ')}. The exchange so far is under each note, newest last.`
-      : `I reviewed the generated code and have some feedback: ${parts.join(', ')}.`,
+      ? `Following up on feedback you have already worked on: ${parts.join(', ')}. ${exchange}`
+      : m.threads
+        ? // A mixed batch: new notes alongside replies to ones already answered. Without this
+          // the threads arrive with nothing to say what they are.
+          `I reviewed the generated code and have some feedback: ${parts.join(', ')}. Some of these continue notes you have already worked on. ${exchange}`
+        : `I reviewed the generated code and have some feedback: ${parts.join(', ')}.`,
   );
 
   const rules: string[] = [];

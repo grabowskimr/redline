@@ -63,6 +63,10 @@ export function batchCommands(deps: Deps) {
       return;
     }
     const ids = batch.map((n) => n.id);
+    // What Undo has to restore. A note being sent *again* was already sent, and clearing its
+    // record would drop it out of the sent section along with its outcome, its session and the
+    // point its thread had reached.
+    const wasSent = new Map(batch.map((n) => [n.id, n.sent]));
     // Rendering reads every referenced file and finding the session shells out to `ps` and
     // the Orca CLI, so this is where the wait is. Report it before the dialog appears.
     const prepared = await progress('finding the Claude Code session…', async () => ({
@@ -154,7 +158,9 @@ export function batchCommands(deps: Deps) {
     void vscode.window
       .showInformationMessage(`Copied ${summary(batch.length, fileCount)} to the clipboard.${tail}`, 'Undo')
       .then((choice) => {
-        if (choice === 'Undo') store.updateMany(ids.map((id) => ({ id, patch: { sent: undefined } })));
+        if (choice === 'Undo') {
+          store.updateMany(ids.map((id) => ({ id, patch: { sent: wasSent.get(id) } })));
+        }
       });
   }
 
@@ -240,11 +246,17 @@ export function batchCommands(deps: Deps) {
   }
 
   async function previewBatch(): Promise<void> {
-    if (store.notes.length === 0) {
+    // The same set `submit` would send, follow-ups included. Rendering only the open notes
+    // showed an empty preview whenever a second round was the thing being prepared.
+    const batch = [...store.notes.filter(isOpen), ...store.notes.filter(hasUnsentReply)];
+    if (batch.length === 0) {
       void vscode.window.showInformationMessage('Redline: no notes to preview.');
       return;
     }
-    const text = await renderNotes(deps, store.notes);
+    const text = await renderNotes(deps, store.notes, {
+      onlyIds: batch.map((n) => n.id),
+      includeInactive: true,
+    });
     await openPreview(text, config.outputTemplate === 'json' ? 'json' : 'markdown');
   }
 

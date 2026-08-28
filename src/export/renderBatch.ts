@@ -66,6 +66,12 @@ export interface RenderModel {
   config: RenderConfig;
   /** Every note has been through a round already: this is a continuation, not a new review. */
   followUp: boolean;
+  /**
+   * At least one note carries an exchange with the agent. Not the same as `followUp`, which
+   * means *every* note does: a batch can mix new notes with replies to answered ones, and the
+   * conversation under those replies needs explaining either way.
+   */
+  threads: boolean;
 }
 
 export interface SnippetSource {
@@ -237,6 +243,7 @@ export function buildModel(notes: readonly ReviewNote[], opts: RenderOptions): R
     generatedAt: (opts.now ?? new Date()).toISOString(),
     config: opts.config,
     followUp: isFollowUp(selected),
+    threads: selected.some((n) => !!n.sent),
   };
   if (opts.git) model.git = opts.git;
   return model;

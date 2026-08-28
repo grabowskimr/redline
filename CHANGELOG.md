@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.1 — 2026-08-28
+
+Three bugs in yesterday's second-round sending, all of them only reachable because a batch can
+now mix new notes with replies.
+
+- Fixed: **Undo after sending a second round dropped the answered notes out of the sent
+  section.** Undo cleared `sent` outright, which was right while a batch could only hold notes
+  that had never been sent — but a note carrying a follow-up already had a record worth
+  keeping: its outcome, the session it is talking to, and how far its thread had got. Undo now
+  restores what was there.
+- Fixed: **Preview showed an empty batch when only follow-ups were waiting.** The button became
+  visible for that case but the preview still rendered open notes only.
+- Fixed: **a mixed batch shipped its conversations with nothing to explain them.** The sentence
+  telling Claude that the `↳` lines under a note are the exchange so far was tied to *every*
+  note being a follow-up, so a round of two new notes and three replies sent the threads
+  unannounced.
+
 ## 1.1.0 — 2026-08-28
 
 **A second round can be sent in one go.** Sending a batch, reading the answers and replying to

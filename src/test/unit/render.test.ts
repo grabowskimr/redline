@@ -340,3 +340,39 @@ describe('continuing a conversation on a note', () => {
     assert.match(out, /I reviewed the generated code and have some feedback/);
   });
 });
+
+describe('a batch that mixes new notes with replies', () => {
+  const build = (notes: ReviewNote[]): string =>
+    renderBatch(notes, { config: cfg(), source, includeInactive: true, now: new Date('2026-08-28T10:00:00Z') });
+
+  const fresh = note({ id: 'a', seq: 1, body: 'rename this' });
+  const answered = note({
+    id: 'b',
+    seq: 2,
+    body: 'remove this comment',
+    addenda: ['Claude: removed it', 'the other one too, please'],
+    sent: { at: '2026-08-28T09:00:00Z', snippetHash: 'h', addendaAtSend: 1 },
+  });
+
+  it('explains the conversation under a note even when the batch is not all follow-ups', () => {
+    // Only reachable since a round can mix the two: the threading sentence was tied to *every*
+    // note being a follow-up, so a mixed batch shipped the exchanges with nothing to say what
+    // they were.
+    const text = build([fresh, answered]);
+    assert.match(text, /The exchange so far is under each note, newest last\./);
+    assert.match(text, /Some of these continue notes you have already worked on\./);
+    assert.match(text, /↳ Claude: removed it/, 'and the thread itself is in there');
+  });
+
+  it('still says "following up" when every note is one', () => {
+    const text = build([answered]);
+    assert.match(text, /Following up on feedback you have already worked on/);
+    assert.doesNotMatch(text, /Some of these continue/);
+  });
+
+  it('says neither for a first round', () => {
+    const text = build([fresh]);
+    assert.doesNotMatch(text, /exchange so far/);
+    assert.doesNotMatch(text, /Some of these continue/);
+  });
+});
