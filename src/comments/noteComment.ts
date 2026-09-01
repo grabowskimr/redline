@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import { AGENT_TURN_PREFIX, formatLineRange, hasUnsentReply, isAgentTurn, KIND_META, NoteKind, ReviewNote } from '../model/note';
-import { fenceFor } from '../export/renderBatch';
 import { KIND_GLYPH } from '../model/kindGlyphs';
 
 export const COMMENT_CONTEXT = 'redline.comment';
@@ -39,16 +38,33 @@ export function authorFor(note: ReviewNote): vscode.CommentAuthorInformation {
   return { name, iconPath: avatar(note.kind) };
 }
 
-/** The dimmed text next to the author: where the note points, and how it is doing. */
+/**
+ * The dimmed text next to the author: where the note points, and how it is doing.
+ *
+ * It used to have almost nothing to say, because a widget only existed while a note was
+ * unanswered — one of "sent" or nothing. Now that an answered note keeps its widget for as
+ * long as its lines hold still, the answer is read here rather than on the card, and the label
+ * has to carry the state that goes with it. The words are the card's own, so the two surfaces
+ * never describe the same note differently.
+ *
+ * Two states normally cannot appear here, because both take the widget away: `done`, and an
+ * orphaned anchor. `⚠ stale` below is kept for the one window where a widget outlives the
+ * transition — a note that orphans while a draft is open in its box is deliberately not
+ * disposed (`CommentHost.isBeingEdited`), and finishing that edit relabels it in place. Without
+ * the branch the widget would sit there claiming to point at code that is gone.
+ */
 export function commentLabel(note: ReviewNote): string {
   const bits = [formatLineRange(note.range)];
-  // An unsent reply comes first: the note may say "done", but the conversation is waiting on
-  // you to send what you just wrote, and that is the more useful thing to know.
+  // An unsent reply comes first: the conversation is waiting on you to send what you just
+  // wrote, which is the more useful thing to know than that it has been sent once already.
   if (hasUnsentReply(note)) bits.push('✎ follow-up not sent');
-  else if (note.sent?.outcome === 'done') bits.push('✅ done');
-  else if (note.sent?.outcome === 'skipped') bits.push('⛔ skipped');
+  else if (note.rejected) bits.push('turned down');
+  // Claude has reported back and nobody has agreed with it yet — the same "needs approval" the
+  // card shows, and the reason the answer is worth reading right here.
+  else if (note.sent?.outcome) bits.push('needs approval');
+  else if (note.sent?.route === 'clipboard') bits.push('on your clipboard');
+  else if (note.sent?.route === 'staged') bits.push('staged');
   else if (note.sent) bits.push('sent');
-  else if (note.done) bits.push('✓ done');
   if (note.anchor.orphaned) bits.push('⚠ stale');
   return bits.join(' · ');
 }
@@ -63,10 +79,6 @@ export function renderCommentBody(note: ReviewNote): vscode.MarkdownString {
       '',
       isAgentTurn(a) ? `↳ **Claude:** ${a.slice(AGENT_TURN_PREFIX.length).trim()}` : `↳ **You:** ${a}`,
     );
-  }
-  if (note.suggestion !== undefined) {
-    const fence = fenceFor(note.suggestion);
-    parts.push('', '**Suggested change**', '', `${fence}${note.languageId ?? ''}`, note.suggestion, fence);
   }
   const shots = note.attachments ?? [];
   if (shots.length) {

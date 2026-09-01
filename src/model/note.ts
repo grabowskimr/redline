@@ -105,19 +105,27 @@ export interface ReviewNote {
   /** Follow-up comments added inside the same thread; appended on export. */
   addenda: string[];
   kind: NoteKind;
-  /** Fenced code the agent should apply verbatim at `range`. */
-  suggestion?: string;
   /** Absolute paths of attached images (screenshots), stored in extension storage. */
   attachments?: string[];
   /**
-   * For each attachment, how many turns the conversation had when it was attached.
+   * Per attachment, the turn it is evidence for: an index into `addenda` plus one, with 0
+   * meaning the note itself.
    *
-   * Runs alongside `attachments` rather than inside it, so an older note without it still
-   * reads. Zero means it belongs to the note itself; anything higher means it was attached to
-   * a follow-up, which is what the card says beneath it. Nothing else can tell the two apart:
-   * both are paths.
+   * Runs alongside `attachments` rather than inside it, so a note written before this existed
+   * still reads. Nothing else can tell the two apart — both are just paths — and the card puts
+   * a screenshot beside the words it was taken for.
    */
   attachmentTurns?: number[];
+  /**
+   * The code as it was when the note was written, and the line it started on.
+   *
+   * Held apart from `anchor.snippet`, which looks like the same thing and is not: that one is
+   * the *search key* the note is found by, and it has to follow the code as the agent rewrites
+   * it or the note orphans on the first edit. This never moves. The card shows it, because a
+   * note about code that has since changed is a record of what you were looking at when you
+   * wrote it — showing today's lines under yesterday's comment quietly rewrites the question.
+   */
+  snapshot?: { code: string; startLine: number };
   /**
    * Set when the change Claude made was turned down.
    *
@@ -147,6 +155,15 @@ export interface ReviewNote {
     fileHash?: string;
     /** SessionTarget key of the session this note went to. */
     target?: string;
+    /**
+     * How it left, when it did not go straight into a session.
+     *
+     * Absent means it was typed into a Claude Code session and the agent has it. Otherwise
+     * nobody has read it yet and the panel must not claim they have: `clipboard` is waiting
+     * for you to paste it, `staged` for you to type one word into a session that Redline
+     * cannot reach. Saying "waiting for Claude" about either is a lie about where the work is.
+     */
+    route?: 'clipboard' | 'staged';
     /** Filled in from the agent's report-back. */
     outcome?: 'done' | 'skipped' | 'answered';
     reply?: string;
@@ -174,9 +191,9 @@ export interface NewNoteInput {
   languageId?: string;
   range: SerialRange;
   anchor: NoteAnchor;
+  snapshot?: { code: string; startLine: number };
   body: string;
   kind?: NoteKind;
-  suggestion?: string;
   git?: GitSnapshot;
 }
 
@@ -213,6 +230,54 @@ export function isAgentTurn(turn: string): boolean {
 }
 
 /**
+ * Does this note keep a widget in the editor?
+ *
+ * It used to lose one the moment Claude said anything, on the reasoning that the conversation
+ * belongs on the card. That was wrong for the common case: for a question nothing moves, and
+ * the answer is most useful sitting against the lines it is about — closing the widget made you
+ * go and find the card to read a reply about code still in front of you.
+ *
+ * So the widget stays, and what takes it away is the note ceasing to be about the code beside
+ * it:
+ *
+ *   - you have settled it (`done`) — there is no conversation left to have on those lines;
+ *   - the lines it was anchored to are gone (`orphaned`), so it is pointing at nothing;
+ *   - the lines it was about have *changed* since it was sent, so the code beside the answer is
+ *     no longer the code the answer is about. That is exactly what a change request produces,
+ *     and it is why one behaves differently from a question without either being special-cased.
+ *
+ * @param linesChanged whether this note's own lines differ from when it was sent. Unknown —
+ * no document open, nothing resolved yet — counts as unchanged: a widget that vanishes because
+ * a file is not open would come back on opening it, which is worse than leaving it be.
+ */
+export function showsInEditor(note: ReviewNote, linesChanged = false): boolean {
+  if (note.done) return false;
+  if (note.anchor.orphaned) return false;
+  return !linesChanged;
+}
+
+
+/**
+ * Where this round's answer from Claude sits in the thread, or -1 if it has not answered yet.
+ *
+ * The report is read while the run is still going, so the same note is answered several times
+ * as the agent refines what it wrote. Appending each version left the card showing the answer
+ * twice in slightly different words; this is what the newest one replaces. A turn added since
+ * the last send belongs to this round — anything before it is the record of an earlier one,
+ * and must not be touched.
+ */
+export function agentTurnThisRound(n: ReviewNote): number {
+  // Absent on notes sent before the mark was recorded. Zero, not `n.addenda.length`: that is
+  // read live, so it excluded every turn written after the send too — including the report
+  // being applied right now. The index was always -1, every report appended, and the card
+  // showed the same answer several times in slightly different words: the duplication this
+  // function exists to prevent. Falling back to the whole thread can only reach an older
+  // round on a note nothing has written since the upgrade.
+  const since = n.sent?.addendaAtSend ?? n.addenda.length;
+  return n.addenda.findIndex((turn, at) => at >= since && isAgentTurn(turn));
+}
+
+/**
  * A follow-up *you* wrote after the last send: the agent has not seen it yet.
  *
  * This is what reopens a finished note. Only your own turns count — the agent's report is
@@ -221,6 +286,16 @@ export function isAgentTurn(turn: string): boolean {
  */
 export function hasUnsentReply(n: ReviewNote): boolean {
   if (!n.sent) return false;
+  // Nothing is owed on a note you have finished with — but the turn is still there and still
+  // unsent. Reading `done` here rather than moving the mark forward is what lets reopening
+  // the note give it back: the mark cannot be moved back, and a follow-up that quietly stopped
+  // counting as unsent is one the user believes they asked and Claude never saw.
+  if (n.done) return false;
+  // Same fallback, for the same reason: `n.addenda.length` is read live, so on a note sent
+  // before the mark existed *every* turn counted as seen, including one written a moment ago.
+  // The follow-up was silently unsendable for the life of the note and the card did not even
+  // mark it. Counting nothing as seen can at worst offer to re-send a turn from before the
+  // upgrade — only your own turns qualify, so a report cannot trip it.
   const seen = n.sent.addendaAtSend ?? n.addenda.length;
   return n.addenda.slice(seen).some((turn) => !isAgentTurn(turn));
 }
@@ -233,16 +308,33 @@ export function isOnDeck(n: ReviewNote): boolean {
   return !n.sent;
 }
 
-export function isSent(n: ReviewNote): boolean {
-  return n.sent !== undefined;
+/**
+ * When the round you are still working through began, or undefined if none is open.
+ *
+ * The oldest send among the notes that are not settled yet. "The last run" reads the
+ * transcript for your last message, which is right until you answer three cards one at a time
+ * and each answer becomes its own run — so the diff narrows to whatever the newest one
+ * touched, and the rest of the round disappears from it. A review is a round, not a message.
+ */
+export function roundStart(notes: readonly ReviewNote[]): string | undefined {
+  let earliest: string | undefined;
+  for (const n of notes) {
+    if (n.done || !n.sent?.at) continue;
+    if (!earliest || n.sent.at < earliest) earliest = n.sent.at;
+  }
+  return earliest;
 }
+
 
 /** Intent the prompt communicates to the agent, derived from the kind. */
 export type Intent = 'change' | 'idea' | 'question' | 'fyi';
 export function intentOf(n: ReviewNote): Intent {
   if (n.kind === 'question') return 'question';
   if (n.kind === 'idea') return 'idea';
-  if (n.kind === 'praise') return 'fyi';
+  // Neither asks for work in this run. A todo filed under change requests was told to work
+  // through it in order by the section it was in, and to leave it alone by the rule on the
+  // note itself — and a contradiction is read as permission.
+  if (n.kind === 'praise' || n.kind === 'todo') return 'fyi';
   return 'change';
 }
 

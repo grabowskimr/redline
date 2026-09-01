@@ -4,6 +4,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Logger } from '../logger';
 import { ReviewStore } from '../store/reviewStore';
+import { Config } from '../config';
+import { roundStart } from '../model/note';
 import { GitService } from './gitApi';
 import { lastRequestStart, lastRunStart, latestSessionAmong, reviewWindowStart } from '../claude/transcripts';
 import { parseDiffByFile, parseHunks } from './hunks';
@@ -56,7 +58,7 @@ export const EMPTY_SIDE_SCHEME = 'redline-empty';
  * having to open it. Only ever applied to the empty side, so the mangled extension costs
  * nothing: there is no content to highlight.
  */
-function emptySide(uri: vscode.Uri, note?: string): vscode.Uri {
+export function emptySide(uri: vscode.Uri, note?: string): vscode.Uri {
   const path = note ? `${uri.path} (${note})` : uri.path;
   return uri.with({ scheme: EMPTY_SIDE_SCHEME, path, query: '', fragment: '' });
 }
@@ -110,6 +112,34 @@ const ROOT_MISS_MS = 30_000;
 const ROOT_TIMEOUT_MS = 10_000;
 
 /** Beyond this a snapshot is not worth waiting for, and the older signals cover the gap. */
+/**
+ * How long any single git call may take before it is killed.
+ *
+ * Generous: `git add -A` over a 42,000-file monorepo is measured at about two seconds warm and
+ * six and a half cold, and a `diff` over a large range is slower still. This is the "something
+ * is stuck" boundary, not a performance budget.
+ */
+export const GIT_TIMEOUT_MS = 60_000;
+
+/** How many git processes may run at once for a per-file fan-out. */
+const GIT_FANOUT = 8;
+
+/** How many files may be read whole at once. Both sides of each, so this is 2× in memory. */
+const FILE_FANOUT = 16;
+
+/** `Promise.all` with a ceiling, in source order. */
+async function inBatches<T, R>(
+  items: readonly T[],
+  size: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(...(await Promise.all(items.slice(i, i + size).map(fn))));
+  }
+  return out;
+}
+
 const SNAPSHOT_TIMEOUT_MS = 30_000;
 
 /**
@@ -184,13 +214,18 @@ export interface RangeSummary {
  * "What changed that I should review?"
  *
  * The base commit is resolved, in order of preference:
- *   1. a baseline the user pinned explicitly (Mark Baseline),
+ *   1. a baseline the user pinned explicitly (Pin Baseline Here),
  *   2. the commit HEAD pointed at when the current Claude Code session started — so work
  *      the agent committed *during* the session is included,
- *   3. HEAD — i.e. every uncommitted change.
+ *   3. the published floor: `merge-base HEAD <upstream>`, everything this worktree has that
+ *      the remote does not. This is what answers for a repository opened cold, with no
+ *      session to read, which is the common case.
+ *   4. HEAD — i.e. every uncommitted change.
  *
- * Comparing a commit against the working tree always includes uncommitted work, so this
- * holds even when VS Code is opened long after the agent finished.
+ * Comparing a commit against the working tree always includes uncommitted work, so all four
+ * hold even when VS Code is opened long after the agent finished.
+ *
+ * `docs/review-range.md` covers this, and the run boundary, at more length.
  */
 const IGNORED_PATH = /\/(?:\.git|node_modules|dist|out|build|\.next|coverage|\.turbo|\.nx)\//;
 
@@ -202,6 +237,8 @@ export class ReviewRange implements vscode.Disposable {
   private root: string | undefined;
   /** Directories a Claude session was seen running in (added as sessions are detected). */
   private readonly cwdHints = new Set<string>();
+
+
   private cache: { at: number; summary: RangeSummary } | undefined;
   /** Something changed on disk: recompute when the floor above allows it. */
   private stale = false;
@@ -252,6 +289,8 @@ export class ReviewRange implements vscode.Disposable {
     private readonly store: ReviewStore,
     private readonly logger: Logger,
     private readonly git?: GitService,
+    /** Optional so the range can be built before settings are, as the tests do. */
+    private readonly config?: Config,
   ) {
     const watcher = vscode.workspace.createFileSystemWatcher('**/*', false, false, false);
     const onFsEvent = (uri: vscode.Uri): void => {
@@ -308,7 +347,11 @@ export class ReviewRange implements vscode.Disposable {
       cwd: root,
       env: env ? { ...process.env, ...env } : process.env,
       maxBuffer: 32 * 1024 * 1024,
-      ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
+      // Every call is bounded, not only the ones that ask. A `git` that never returns — an
+      // index lock held by another process, a network filesystem, a wedged `core.fsmonitor` —
+      // used to pin the in-flight summary promise for the life of the window: the panel and
+      // the status bar simply stopped updating, silently, with no way back but a reload.
+      timeout: timeoutMs ?? GIT_TIMEOUT_MS,
     });
     return stdout;
   }
@@ -435,11 +478,23 @@ export class ReviewRange implements vscode.Disposable {
             label: `since ${shortTime(since)} (Claude session)`,
             origin: 'session',
           };
-          // Where the last run begins. The user's own last request first — that is the
-          // question being asked ("what did it do about what I just sent?"). Only when no
-          // request can be found does the idle-gap heuristic stand in.
+          // Where the last run begins. The round you are working through wins when one is
+          // open — everything the agent has done since you sent it, however many messages that
+          // took. Otherwise the user's own last request, which is the question being asked
+          // ("what did it do about what I just sent?"), and only when neither can be found
+          // does the idle-gap heuristic stand in.
+          const asked = request ?? (await lastRunStart(session, Math.max(1, this.gapMinutes()) * 60 * 1000));
+          /*
+           * The round you are still working through, if one is open: the oldest send among the
+           * notes you have not settled. Read straight from the store rather than held here, so
+           * it cannot go stale — approving the last note puts the transcript back in charge on
+           * the next resolve.
+           */
+          const round = roundStart(this.store.notes);
           const runSince =
-            request ?? (await lastRunStart(session, Math.max(1, this.gapMinutes()) * 60 * 1000));
+            round && Number.isFinite(Date.parse(round)) && Date.parse(round) < Date.parse(asked)
+              ? round
+              : asked;
           if (Date.parse(runSince) > Date.parse(since)) {
             const runBase = await this.commitAt(runSince);
             if (runBase) resolved.run = { base: runBase, since: runSince };
@@ -926,8 +981,10 @@ export class ReviewRange implements vscode.Disposable {
     if (this.snapshot && root) {
       const snap = this.snapshot;
       const snapAt = Date.parse(snap.at);
-      const verdicts = await Promise.all(
-        files.map(async (f) => {
+      // In batches. Comparing bytes reads both sides of a file whole, so a two-hundred-file
+      // run all at once is both copies of every one of them alive in the extension host at the
+      // same moment — hundreds of megabytes, to answer a question about which files changed.
+      const verdicts = await inBatches(files, FILE_FANOUT, async (f) => {
           // Covered by the snapshot: compare the bytes, which is exact.
           if (snap.has(f)) return [f, await differsFromSnapshot(snap, root, f)] as const;
           // Not covered — it was clean when the run began, or it is untracked, which the
@@ -936,8 +993,7 @@ export class ReviewRange implements vscode.Disposable {
           const mtime = await this.mtimeOf(f);
           if (mtime === undefined) return [f, true] as const; // deleted: always worth seeing
           return [f, mtime >= snapAt - RUN_GRACE_MS] as const;
-        }),
-      );
+      });
       return {
         files: verdicts.filter(([, changed]) => changed).map(([f]) => f),
         attributed: true,
@@ -1014,11 +1070,6 @@ export class ReviewRange implements vscode.Disposable {
     } catch {
       return undefined;
     }
-  }
-
-  /** Tracked paths that differ between `base` and the working tree (staged or not). */
-  private async changedSince(base: string): Promise<string[]> {
-    return [...(await this.changedSinceWithStatus(base)).keys()];
   }
 
   /**
@@ -1162,12 +1213,10 @@ export class ReviewRange implements vscode.Disposable {
   }
 
   private gapMinutes(): number {
-    // `localReview.*` is still honoured after the rename, same as everywhere else.
-    const v =
-      vscode.workspace.getConfiguration('redline').get<number>('lastRunGapMinutes') ??
-      vscode.workspace.getConfiguration('localReview').get<number>('lastRunGapMinutes') ??
-      DEFAULT_RUN_GAP_MS / 60_000;
-    return Number.isFinite(v) && v > 0 ? v : DEFAULT_RUN_GAP_MS / 60_000;
+    // Through `Config`, like every other setting: reading the section directly meant the
+    // `localReview.*` fallback beside it could never fire, because a key with a manifest
+    // default never comes back undefined.
+    return this.config?.lastRunGapMinutes ?? DEFAULT_RUN_GAP_MS / 60_000;
   }
 
   /** Absolute URIs of the changed files (the last run's, or all of them). */
@@ -1385,8 +1434,10 @@ export class ReviewRange implements vscode.Disposable {
       if (this.snapshot) {
         const snap = this.snapshot;
         const covered = summary.recent.filter((f) => snap.has(f));
-        const results = await Promise.all(
-          covered.map(async (rel) => {
+        // In batches. One `git diff --no-index` per changed file, all at once, is five hundred
+        // git processes for a five-hundred-file run — enough to starve the machine the editor
+        // is running on, for a keypress that walks to the next hunk.
+        const results = await inBatches(covered, GIT_FANOUT, async (rel) => {
             const stored = snap.storedPath(rel);
             if (stored === undefined) return undefined;
             try {
@@ -1398,8 +1449,7 @@ export class ReviewRange implements vscode.Disposable {
               const stdout = (err as { stdout?: string }).stdout;
               return typeof stdout === 'string' ? { rel, ranges: parseHunks(stdout) } : undefined;
             }
-          }),
-        );
+        });
         for (const r of results) {
           if (!r) continue;
           fromRun.add(r.rel);

@@ -13,7 +13,6 @@ export function json(m: RenderModel): string {
       body: n.body,
     };
     if (n.note.addenda.length) o['addenda'] = n.note.addenda;
-    if (n.suggestion !== undefined) o['suggestion'] = n.suggestion;
     if (n.snippet !== undefined) o['snippet'] = n.snippet;
     if (n.language !== undefined) o['language'] = n.note.languageId ?? n.language;
     if (n.attachments.length) o['screenshots'] = n.attachments;

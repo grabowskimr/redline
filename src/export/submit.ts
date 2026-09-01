@@ -1,8 +1,24 @@
 import * as vscode from 'vscode';
 import { GitContext, renderBatch, RenderOptions, SnippetSource } from './renderBatch';
 import { ReviewNote } from '../model/note';
+import { Config } from '../config';
+import { Logger } from '../logger';
+import { GitService } from '../git/gitApi';
+import { ReviewRange } from '../git/reviewRange';
 import { hashSnippet, resolveAnchor, snippetAt } from '../anchor/anchorService';
-import { Deps } from '../commands/deps';
+/**
+ * The four things rendering a batch actually needs.
+ *
+ * Named here rather than taking the whole `Deps`, which is the commands layer's bag of
+ * everything: importing it made `export/` and `commands/` point at each other, for four fields
+ * out of nine. `Deps` satisfies this structurally, so callers pass it unchanged.
+ */
+export interface RenderDeps {
+  config: Config;
+  git: GitService;
+  logger: Logger;
+  range: ReviewRange;
+}
 import { deliveryToken } from '../claude/handover';
 import { reportPath } from '../claude/reportFile';
 import { uriForNote } from '../comments/uriMapping';
@@ -30,7 +46,12 @@ export async function buildSnippetSource(notes: readonly ReviewNote[]): Promise<
       }
     }),
   );
-  return { textFor: (n) => cache.get(`${n.workspaceFolder ?? ''}::${n.path}`) };
+  const keyOf = (n: ReviewNote): string => `${n.workspaceFolder ?? ''}::${n.path}`;
+  return {
+    textFor: (n) => cache.get(keyOf(n)),
+    // Looked for and not found, as opposed to never looked for.
+    missing: (n) => cache.has(keyOf(n)) && cache.get(keyOf(n)) === undefined,
+  };
 }
 
 /** What a note's code looked like when it was sent. */
@@ -63,7 +84,7 @@ export async function currentHashes(notes: readonly ReviewNote[]): Promise<Map<s
   return out;
 }
 
-export async function gitContext(deps: Deps, notes: readonly ReviewNote[]): Promise<GitContext | undefined> {
+export async function gitContext(deps: RenderDeps, notes: readonly ReviewNote[]): Promise<GitContext | undefined> {
   if (!deps.config.includeGitContext) return undefined;
   const first = notes[0];
   const uri = first ? uriForNote(first.path, first.workspaceFolder) : vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -71,7 +92,7 @@ export async function gitContext(deps: Deps, notes: readonly ReviewNote[]): Prom
 }
 
 export async function renderNotes(
-  deps: Deps,
+  deps: RenderDeps,
   notes: readonly ReviewNote[],
   extra: Partial<RenderOptions> = {},
 ): Promise<string> {
@@ -90,7 +111,7 @@ export async function renderNotes(
 }
 
 /** Write to the clipboard and verify by reading back. Falls back to an untitled document. */
-export async function copyToClipboard(deps: Deps, text: string): Promise<boolean> {
+export async function copyToClipboard(deps: RenderDeps, text: string): Promise<boolean> {
   try {
     await vscode.env.clipboard.writeText(text);
     const back = await vscode.env.clipboard.readText();

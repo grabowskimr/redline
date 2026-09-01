@@ -9,6 +9,19 @@ import { AgentSession, listAgentSessions } from './agentsCli';
 
 const execFileP = promisify(execFile);
 
+/**
+ * Bounds for everything this module shells out to.
+ *
+ * None of it had any. `ps` and `lsof` run on a timer to find sessions — `lsof` against a stale
+ * network mount blocks indefinitely — and a hung `orca` left a send with no way out and no
+ * message. Git was given a ceiling for exactly this reason; the rest of the process table was
+ * not. A probe that does not answer promptly has nothing worth waiting for.
+ */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/** Delivery is worth waiting longer for: it is the thing the user actually asked for. */
+const DELIVER_TIMEOUT_MS = 30_000;
+
 /** A place we can deliver a prompt to. */
 export interface SessionTarget {
   /** Stable identity used to remember "where the batch went": `vscode:<name>` / `orca:<handle>`. */
@@ -38,7 +51,7 @@ interface Proc {
 
 async function listProcesses(): Promise<Proc[]> {
   if (process.platform === 'win32') return [];
-  const { stdout } = await execFileP('ps', ['-axo', 'pid=,ppid=,comm=']);
+  const { stdout } = await execFileP('ps', ['-axo', 'pid=,ppid=,comm='], { timeout: PROBE_TIMEOUT_MS });
   const out: Proc[] = [];
   for (const line of stdout.split('\n')) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
@@ -56,7 +69,11 @@ async function cwdOf(pid: number): Promise<string | undefined> {
     }
   }
   try {
-    const { stdout } = await execFileP('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn']);
+    // `lsof` on a stale network mount can block for ever, and it runs once per Claude process
+    // on a timer. Nothing here is worth a wedged discovery loop.
+    const { stdout } = await execFileP('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+      timeout: PROBE_TIMEOUT_MS,
+    });
     const n = stdout.split('\n').find((l) => l.startsWith('n'));
     return n ? n.slice(1) : undefined;
   } catch {
@@ -106,6 +123,7 @@ interface OrcaTerminal {
 
 export async function orcaTerminals(): Promise<OrcaTerminal[]> {
   const { stdout } = await execFileP(await orcaExecutable(), ['terminal', 'list', '--json'], {
+    timeout: PROBE_TIMEOUT_MS,
     maxBuffer: 4 * 1024 * 1024,
   });
   const parsed = JSON.parse(stdout) as { ok?: boolean; result?: { terminals?: OrcaTerminal[] } };
@@ -142,11 +160,6 @@ export async function findTargets(logger: Logger): Promise<SessionTarget[]> {
       targetsInFlight = undefined;
     });
   return targetsInFlight;
-}
-
-/** Terminals are only valid for the window that owns them, so a fresh look is sometimes right. */
-export function forgetTargets(): void {
-  targetsCache = undefined;
 }
 
 async function discoverTargets(logger: Logger): Promise<SessionTarget[]> {
@@ -403,7 +416,13 @@ export async function pickTarget(
 ): Promise<SessionTarget | undefined> {
   const targets = pool ?? (await findTargets(logger)).filter(isReachable);
   if (targets.length === 0) {
-    void vscode.window.showInformationMessage('Redline: no reachable Claude Code session found.');
+    // "Reachable" meant nothing to anyone who had not read the source: it is a Claude Code
+    // session in a VS Code terminal or an Orca terminal, for this folder. And there is a way
+    // through even when there is none — the plugin collects a batch from any session at all.
+    void vscode.window.showInformationMessage(
+      'Redline: no Claude Code session here that VS Code can type into — one in a VS Code or Orca terminal, in this folder. ' +
+        'Sending still works: the batch goes to your clipboard, and with the plugin installed a session anywhere can collect it.',
+    );
     return undefined;
   }
   const picked = await vscode.window.showQuickPick(
@@ -450,7 +469,7 @@ async function deliverToken(
     const args = ['terminal', 'send', '--terminal', target.orcaHandle, '--text', token, '--json'];
     if (opts.autoSubmit) args.push('--enter');
     try {
-      await execFileP(bin, args);
+      await execFileP(bin, args, { timeout: DELIVER_TIMEOUT_MS });
     } catch (err) {
       logger.error('orca terminal send failed', err);
       return { ok: false, message: 'Sending to the Orca terminal failed (see log).', target };
@@ -494,8 +513,31 @@ async function waitForIdle(bin: string, handle: string, logger: Logger): Promise
   }
 }
 
+/**
+ * Control bytes that must never reach the pty: all of C0 except tab, newline and carriage
+ * return, plus DEL. `ESC` is the one that matters; the rest go with it because a review has
+ * no use for them either.
+ */
+// eslint-disable-next-line no-control-regex
+const CONTROL_BYTES = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+
 export function bracketedPaste(text: string): string {
-  return `\u001b[200~${text.replace(/\r?\n/g, '\r')}\u001b[201~`;
+  /*
+   * Paste-terminator injection.
+   *
+   * The markers below promise the terminal that everything between them is pasted text, and
+   * the newline-to-`\r` rewrite means a `\r` in there is Enter. So a `\u001b[201~` *inside* the
+   * payload closes the paste early and the remainder arrives as live keystrokes: in a Claude
+   * Code TUI that submits prompts nobody chose, and in a terminal that has fallen back to a
+   * shell it runs commands.
+   *
+   * Both halves of a batch are writable by someone other than the user — the lines quoted out
+   * of the files under review, and Claude's own reply text, which travels in the same payload
+   * — and the bytes are invisible in an editor. Stripped rather than escaped or truncated: the
+   * note still arrives in full, minus the control bytes.
+   */
+  const safe = text.replace(CONTROL_BYTES, '');
+  return `\u001b[200~${safe.replace(/\r?\n/g, '\r')}\u001b[201~`;
 }
 
 /** Remove outbox files older than a day (only relevant for `file` mode). */
@@ -552,7 +594,17 @@ export async function sendBatchToClaude(
     const token = await deliveryToken(target.cwd);
     if (token) {
       try {
-        await stageForHandover(target.cwd, text.trimEnd());
+        // A batch already waiting to be collected is not overwritten. Both reviews are real
+        // work; the earlier one is one typed word away from being delivered, and the later is
+        // on the clipboard, so saying so beats losing either.
+        if ((await stageForHandover(target.cwd, text.trimEnd())) === 'occupied') {
+          logger.warn('a review is already staged for the plugin here and has not been collected');
+          return {
+            ok: false,
+            message: `A review is already waiting here — type "${token}" in ${target.label} to deliver it, then send this one. It is on the clipboard meanwhile.`,
+            target,
+          };
+        }
         handedOver = true;
         logger.info(`staged ${text.length} chars for the Redline plugin; sending "${token}"`);
         return await deliverToken(token, target, context, logger, opts);
@@ -599,8 +651,28 @@ export async function sendBatchToClaude(
     // is unnecessary, and a session was seen storing them as literal `<ESC>[200~` text at
     // the head of the prompt.
     const bin = await orcaExecutable();
+    /*
+     * Linux caps a single argument at 128 KiB (`MAX_ARG_STRLEN`), whatever `ARG_MAX` says, and
+     * the whole prompt goes as one `--text` argument. Past that the call fails with `E2BIG`,
+     * which surfaces as "sending failed (see log)" — true, and no help at all. macOS has no
+     * per-argument cap, so a batch this size still goes there.
+     *
+     * The prompt is already on the clipboard by the time this runs, so saying so is a way out
+     * rather than a dead end.
+     */
+    const ARG_LIMIT = 120_000;
+    if (process.platform === 'linux' && Buffer.byteLength(payload, 'utf8') > ARG_LIMIT) {
+      logger.warn(`batch too large for one Orca argument (${Buffer.byteLength(payload, 'utf8')} bytes)`);
+      return {
+        ok: false,
+        message: 'too large to type into an Orca terminal on Linux — paste it from the clipboard.',
+        target,
+      };
+    }
     try {
-      await execFileP(bin, ['terminal', 'send', '--terminal', target.orcaHandle, '--text', payload, '--json']);
+      await execFileP(bin, ['terminal', 'send', '--terminal', target.orcaHandle, '--text', payload, '--json'], {
+        timeout: DELIVER_TIMEOUT_MS,
+      });
       if (opts.autoSubmit) {
         // Enter goes as its own keystroke, once the agent's input has actually settled.
         //
@@ -610,7 +682,9 @@ export async function sendBatchToClaude(
         // for the interface to go quiet is the condition that actually matters — measured at
         // 264ms for a 540-character prompt, but it is the wait, not the number, that counts.
         await waitForIdle(bin, target.orcaHandle, logger);
-        await execFileP(bin, ['terminal', 'send', '--terminal', target.orcaHandle, '--enter', '--json']);
+        await execFileP(bin, ['terminal', 'send', '--terminal', target.orcaHandle, '--enter', '--json'], {
+          timeout: DELIVER_TIMEOUT_MS,
+        });
       }
     } catch (err) {
       logger.error('orca terminal send failed', err);
@@ -645,7 +719,10 @@ async function readPage(handle: string, cursor?: string): Promise<TerminalRead |
   const args = ['terminal', 'read', '--terminal', handle];
   if (cursor !== undefined) args.push('--cursor', cursor, '--limit', '1000');
   args.push('--json');
-  const { stdout } = await execFileP(await orcaExecutable(), args, { maxBuffer: 32 * 1024 * 1024 });
+  const { stdout } = await execFileP(await orcaExecutable(), args, {
+    maxBuffer: 32 * 1024 * 1024,
+    timeout: PROBE_TIMEOUT_MS,
+  });
   const parsed = JSON.parse(stdout) as { result?: { terminal?: TerminalRead } };
   return parsed.result?.terminal;
 }

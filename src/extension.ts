@@ -9,7 +9,7 @@ import { ReviewStore } from './store/reviewStore';
 import { emptyState } from './model/schema';
 import { isOpen, ReviewNote } from './model/note';
 import { GitService } from './git/gitApi';
-import { registerEmptySideProvider, ReviewRange } from './git/reviewRange';
+import { GIT_TIMEOUT_MS, registerEmptySideProvider, ReviewRange } from './git/reviewRange';
 import { RunGutter } from './git/runGutter';
 import { LiveActivity } from './claude/liveActivity';
 import { sweepScratchIndexes } from './git/snapshotTree';
@@ -20,8 +20,8 @@ import { CardsViewProvider, CARDS_VIEW_ID } from './view/cardsView';
 import { NoteDecorations } from './view/noteDecorations';
 import { StatusBar } from './view/statusBar';
 import { LiveTracker } from './anchor/liveTracker';
-import { Attachments } from './attachments';
-import { migrateLegacyStorage } from './migrate';
+import { Attachments } from './store/attachments';
+import { migrateLegacyStorage } from './store/migrate';
 import { setUpHook } from './commands/hookSetup';
 import { HookSignals } from './claude/hookSignals';
 import { SessionWatcher } from './claude/sessionWatcher';
@@ -32,6 +32,7 @@ import { batchCommands } from './commands/batchCommands';
 import { Deps } from './commands/deps';
 
 let store: ReviewStore | undefined;
+/** Set once Ask exists, so a closing window does not lose a comment written a moment ago. */
 
 /** Minimal API returned from `activate` — used by the integration tests. */
 export interface RedlineApi {
@@ -56,8 +57,6 @@ export interface RedlineApi {
    */
   hookRuns(): number;
   reportHookRun(): Promise<void>;
-  /** Whether the follow-up box is open on a note — the widget's own state is not observable. */
-  replyOpenOn(noteId: string): boolean;
 }
 
 /** Wall time activation took, reported through the API so it can be asserted, not assumed. */
@@ -74,6 +73,10 @@ const gitIn = (root: string) => async (args: string[]): Promise<string> => {
   const { stdout } = await promisify(execFile)('git', ['-c', 'core.quotePath=false', ...args], {
     cwd: root,
     maxBuffer: 32 * 1024 * 1024,
+    // The same bound as every other git call. This one feeds the "before" side of a diff, so a
+    // `git` that never returns leaves the diff editor loading for ever, with no way back but
+    // reloading the window — the exact failure the timeout elsewhere exists to prevent.
+    timeout: GIT_TIMEOUT_MS,
   });
   return stdout;
 };
@@ -115,6 +118,19 @@ async function activateInner(
       `the notes file was unreadable and was moved to ${loaded.quarantinedTo}; starting with an empty batch`,
     );
   }
+  /*
+   * The notes file is there but could not be read — a permission, a lock, a network share that
+   * blinked. The panel comes up empty either way, so the user has to be told why: without it
+   * they add one note, the debounced write lands, and their whole review is a one-note file.
+   * `Persistence` refuses to write until a load succeeds; this is the half they can see.
+   */
+  const loadFailed = loaded.unreadable !== undefined;
+  if (loadFailed) {
+    void logger.reportError(
+      `could not read your notes (${loaded.unreadable}) — the panel is empty but the file is intact, ` +
+        'and nothing will be saved over it. Reload the window once the file is readable again.',
+    );
+  }
   store = new ReviewStore(loaded.state, persistence, { archiveLimit: () => ARCHIVE_LIMIT });
   context.subscriptions.push(store);
   logger.info(`loaded ${store.notes.length} note(s) from ${notesPath ?? '(memory)'}`);
@@ -133,6 +149,13 @@ async function activateInner(
           if (!(await persistence.changedExternally())) return;
           persistence.discardPending();
           const result = await persistence.load();
+          // A read that failed is not an empty file. Handing that empty state to `reload`
+          // wiped the in-memory notes, and the next edit wrote the wipe back out — the same
+          // hole as the load at activation, reached from the watcher instead.
+          if (result.unreadable !== undefined) {
+            logger.warn(`notes.json changed externally but could not be read (${result.unreadable}); keeping what is in memory`);
+            return;
+          }
           store?.reload(result.state);
           logger.info('notes.json changed externally; reloaded');
         })();
@@ -150,18 +173,46 @@ async function activateInner(
   const git = new GitService(logger);
   const index = new NoteIndex(store);
   const host = new CommentHost(store, config, logger, context);
-  const range = new ReviewRange(store, logger, git);
+
+  // The widget stays on a note until the code under it moves. The tracker fills the index as
+  // documents are read; the host asks it rather than keeping a second copy.
+  host.linesChanged = (id) => index.linesChanged(id);
+  // ... and is told when the answer changes, which no store event announces.
+  context.subscriptions.push(index.onDidChange(() => host.sync()));
+
+  const range = new ReviewRange(store, logger, git, config);
+
   // Gutter marks for the run's own changes, beside the git extension's marks against HEAD.
   const gutter = new RunGutter(range, () => config.runGutter);
   context.subscriptions.push(gutter, config.onDidChange(() => gutter.sync()));
   const attachments = new Attachments(context, store, logger);
   const watcher = new SessionWatcher(logger);
-  context.subscriptions.push(index, host, range, watcher, registerEmptySideProvider(), registerTreeSideProvider(gitIn, () => range.repoRoot()));
+  // `host` disposed here directly, exactly once, regardless of which surface is current —
+  // `CommentSurface.dispose()` no longer cascades into it (see above), so this is now the
+  // only place that tears it down.
+  //
+  // The surface entry comes before `host`: VS Code disposes `context.subscriptions` in the
+  context.subscriptions.push(
+    index,
+    host,
+    range,
+    watcher,
+    registerEmptySideProvider(),
+    registerTreeSideProvider(gitIn, () => range.repoRoot()),
+  );
   // Housekeeping for snapshots a killed window could not clean up after itself.
   void sweepScratchIndexes();
-  void attachments.cleanupOrphans();
+  // Only against a store that is actually the user's notes. This deletes every file in the
+  // attachment directory nothing in the store references, so running it after a failed load
+  // — where the store is empty because the file could not be read — deleted every screenshot
+  // the user had ever attached.
+  if (!loadFailed) void attachments.cleanupOrphans();
 
   // ── UI ───────────────────────────────────────────────────────────────
+  const decorations = new NoteDecorations(store);
+  decorations.linesChanged = (id) => index.linesChanged(id);
+  context.subscriptions.push(index.onDidChange(() => decorations.schedule()));
+
   const cards = new CardsViewProvider(context, store, index, logger);
   cards.attachments = attachments;
   cards.watcher = watcher;
@@ -173,7 +224,7 @@ async function activateInner(
     }),
     range.onDidChange(() => void cards.postSession()),
     watcher.onDidChangeState(() => void cards.postSession()),
-    new NoteDecorations(store),
+    decorations,
   );
 
   const statusBar = new StatusBar(store, config, index, range, watcher);
@@ -196,39 +247,45 @@ async function activateInner(
   );
 
   // ── commands ─────────────────────────────────────────────────────────
-  const deps: Deps = { context, config, logger, store, host, git, index, range, watcher };
+  const deps: Deps = {
+    context,
+    config,
+    logger,
+    store,
+    host,
+    git,
+    index,
+    range,
+    watcher,
+    // Screenshots outlive the note that referred to them unless something says otherwise —
+    // and "otherwise" has to be the real store. While a failed read is holding writes back the
+    // store is empty for reasons that have nothing to do with what the user attached.
+    sweepAttachments: () => {
+      if (!persistence?.suspended) void attachments.cleanupOrphans();
+    },
+  };
   const notes = noteCommands(deps);
   const batch = batchCommands(deps);
-  // A reply typed in the comment widget goes straight back to the agent, with the whole
-  // exchange for that note. Assigned here because note commands are built first.
-  deps.replyToClaude = (noteId) => batch.sendSelected(noteId);
+  context.subscriptions.push(batch);
+
   registerAllCommands(context, logger, {
     'redline.createNote': notes.createNote,
+    'redline.replyToThread': notes.replyToThread,
+    'redline.addNoteHere': notes.addNoteHere,
     'redline.quickAddNote': notes.quickAddNote,
     'redline.editComment': notes.editComment,
     'redline.saveComment': notes.saveComment,
     'redline.cancelEdit': notes.cancelEdit,
-    'redline.cancelReply': notes.cancelReply,
-    'redline.addFollowUp': notes.addFollowUp,
-    'redline.replyToNote': notes.replyToNote,
     'redline.deleteNote': notes.deleteNote,
     'redline.setKind': notes.setKind,
     'redline.kindChange': notes.kindChange,
     'redline.kindBug': notes.kindBug,
-    'redline.kindSecurity': notes.kindSecurity,
-    'redline.kindPerf': notes.kindPerf,
     'redline.kindIdea': notes.kindIdea,
     'redline.kindRefactor': notes.kindRefactor,
     'redline.kindQuestion': notes.kindQuestion,
-    'redline.kindTodo': notes.kindTodo,
-    'redline.kindNit': notes.kindNit,
-    'redline.kindPraise': notes.kindPraise,
-    'redline.addSuggestion': notes.addSuggestion,
-    'redline.applySuggestion': notes.applySuggestion,
     'redline.toggleDone': notes.toggleDone,
     'redline.revealNote': notes.revealNote,
     'redline.reanchorNote': notes.reanchorNote,
-    'redline.reviseNote': notes.reviseNote,
     'redline.submit': () => batch.submit(),
     'redline.sendSelected': batch.sendSelected,
     'redline.previewBatch': batch.previewBatch,
@@ -245,7 +302,6 @@ async function activateInner(
     'redline.markBaseline': batch.markBaseline,
     'redline.clearBaseline': batch.clearBaseline,
     'redline.refresh': batch.refresh,
-    'redline.followUpHere': notes.followUpHere,
     'redline.approveNote': notes.approveNote,
     'redline.cancelQueued': batch.cancelQueued,
     'redline.needsWork': notes.needsWork,
@@ -271,14 +327,29 @@ async function activateInner(
   void HookSignals.ensureDirectory();
   const signals = new HookSignals(logger);
   cards.signals = signals;
+  // The status bar reads the same source the panel does, or the two disagree about whether
+  // Claude is working — with the plugin installed and no Orca terminal, the panel said so and
+  // the status bar showed nothing.
+  statusBar.signals = signals;
+  context.subscriptions.push(
+    signals.onDidTouch(() => statusBar.update()),
+    signals.onDidEndRun(() => statusBar.update()),
+  );
   // What the session is working on, from the hook's own record of what it writes. A terminal
   // in another window shows this and the panel could not.
-  const live = new LiveActivity(signals, range);
+  const live = new LiveActivity(signals, () => range.repoRoot());
   context.subscriptions.push(live, live.onDidChange((a) => cards.postActivity(a)));
   // Late, because the signal channel is created after the commands are: a batch queued while
   // Claude is working needs to know that it is, and the hook is the only thing that knows.
   deps.signals = signals;
-  cards.queuedCount = () => (batch.isQueued() ? (store?.notes.filter(isOpen).length ?? 0) : 0);
+  cards.queuedCount = () => batch.queuedIds().length;
+  cards.queuedIds = () => batch.queuedIds();
+  // The panel draws a held card differently, so it has to hear about it at once rather than on
+  // the next poll — pressing send and watching nothing happen for thirty seconds is the bug.
+  batch.onQueueChange(() => {
+    cards.postNotes();
+    void cards.postSession();
+  });
   // Assigned once the session monitor below exists. A hook signal can only arrive from a
   // file watcher, so never during activation — but relying on that from fifty lines away is
   // not something a later edit should have to know.
@@ -293,6 +364,12 @@ async function activateInner(
       // re-reads a transcript that the running session is actively appending to, which
       // measured 270-600ms, and a file being edited never moves the run boundary.
       range.invalidate(false);
+    }),
+    signals.onDidReport(() => {
+      // The agent settled a note and said so. Answering it now is the difference between a
+      // card that responds while you watch and one that sits on a change you can already see,
+      // saying nothing, until the whole turn ends.
+      batch.applyFiledSoFar().catch((err) => logger.trace(`incremental report failed: ${String(err)}`));
     }),
     signals.onDidStartRun(() => {
       // A new request: the boundary really has moved, and the panel should say so at once.
@@ -312,7 +389,10 @@ async function activateInner(
       // Also the moment a queued batch has been waiting for.
       batch
         .onHookRunFinished()
-        .then(() => batch.flushQueued())
+        // Its own catch: chained onto the same `.catch` below, a queue flush that threw was
+        // reported as "could not report the finished run", and a flush that emptied the queue
+        // and then failed to send left nothing in the log at all.
+        .then(() => batch.flushQueued().catch((err) => logger.warn('could not send the queued notes', err)))
         .catch((err) => logger.warn('could not report the finished run', err));
     }),
   );
@@ -386,11 +466,9 @@ async function activateInner(
     activationMs: () => activationCost,
     range,
     hookRuns: () => batch.hookRunsReported(),
-    replyOpenOn: (noteId) => host.isReplyOpen(noteId),
     reportHookRun: () => batch.onHookRunFinished(),
   };
 }
 
 export async function deactivate(): Promise<void> {
-  await store?.flush();
 }

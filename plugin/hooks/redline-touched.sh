@@ -24,8 +24,11 @@ case "$payload" in
 esac
 [ -n "$sync_mode" ] || printf '{}\n'
 
+# Only the plugin's own copy. There used to be a fallback to `$HOME/.claude/redline-touched.mjs`,
+# from a manual install route that no longer exists — nothing writes that path any more, so all
+# the fallback could still find was somebody's unversioned orphan from an old install, and run it
+# in preference to nothing.
 script="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/hooks/redline-touched.mjs"
-[ -f "$script" ] || script="$HOME/.claude/redline-touched.mjs"
 if [ ! -r "$script" ]; then
   [ -n "$sync_mode" ] && printf '{}\n'
   exit 0

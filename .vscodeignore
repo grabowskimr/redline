@@ -1,21 +1,28 @@
-.vscode/**
-.vscode-test/**
-src/**
-out*/**
-spec/**
-node_modules/**
-.gitignore
-.eslintrc.json
-.prettierrc
-esbuild.js
-tsconfig*.json
-**/*.map
-**/.DS_Store
-test-fixtures/**
-.mocharc.json
-media/jsconfig.json
-docs/**
-scripts/**
-.github/**
-*.vsix
-.editorconfig
+# Everything is excluded, and the package is named file by file below.
+#
+# This was a list of things to leave out, which means anything not on it ships. A stray
+# `Support/Code/argv.json` — written by a mistyped path, holding a proposed-API flag for a
+# feature that no longer exists — was published into the package that way, and nothing failed.
+# What goes in a package that reaches other people's machines is worth stating outright.
+**
+
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md
+
+# The extension itself: one bundled file, its stylesheets, its icons.
+!dist/extension.js
+!media/cards.js
+!media/cards.css
+!media/codicon.css
+!media/codicon.ttf
+!resources/icon.png
+!resources/icon.svg
+
+# The Claude Code plugin, which `redline.setUpHook` installs from inside the extension.
+!.claude-plugin/marketplace.json
+!plugin/.claude-plugin/plugin.json
+!plugin/hooks/hooks.json
+!plugin/hooks/redline-touched.mjs
+!plugin/hooks/redline-touched.sh

@@ -1,3 +1,11 @@
+> **Superseded — kept for history.**
+>
+> This folder is the original build handoff that Redline was written from, when the extension
+> was called Local Review. It describes `localReview.*` commands and a shape the code has long
+> since moved away from; several things listed here were never built, and much of what exists
+> now is not here. Read [the README](../README.md) for what Redline actually does, and the
+> source for how. Nothing in this folder is maintained.
+
 # Local Review — build handoff
 
 Paste this into a fresh Claude Code session at the root of an empty directory:

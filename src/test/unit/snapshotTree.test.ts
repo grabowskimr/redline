@@ -126,6 +126,46 @@ describe('working-tree snapshots', () => {
     }
   });
 
+  it('dates its throwaway index as the one it was copied from', async () => {
+    /*
+     * Why the timestamp matters, and what it cost: a run's changes going missing entirely,
+     * about once in a few hundred.
+     *
+     * Staging skips a file whose stat still matches its index entry. What stops that from
+     * hiding an edit is the index's own mtime — an entry stamped at or after it was written
+     * too recently for its stat to prove anything, so git reads the file instead of trusting
+     * it. Copying the index stamps the copy with the time of the copy, which left every entry
+     * looking comfortably older than the index holding it: the check never fired, and an edit
+     * landing in the same instant as the staging that recorded it was answered out of the
+     * cache. Two snapshots, one tree, and a run that rewrote a file reported as changing
+     * nothing — and it stayed wrong, because the stale entry survives until something
+     * refreshes the real index.
+     *
+     * Asserted on the copy rather than through a doctored edit: the window is a fraction of a
+     * second wide, so reproducing the symptom means recreating git's timing by hand, and a
+     * test that only sometimes catches the regression is not one worth having.
+     */
+    const real = path.join(repo, '.git', 'index');
+    const stamp = (await fs.stat(real, { bigint: true })).mtimeNs;
+
+    let staged: bigint | undefined;
+    const watched: GitRunner = async (args, env) => {
+      // At the moment of staging: `add` is what consults the stat cache.
+      if (args[0] === 'add' && env?.GIT_INDEX_FILE) {
+        staged = (await fs.stat(env.GIT_INDEX_FILE, { bigint: true })).mtimeNs;
+      }
+      return git(args, env);
+    };
+
+    assert.ok(await snapshotWorkingTree(repo, watched));
+    assert.ok(staged !== undefined, 'something was staged');
+    // Millisecond resolution is all `utimes` carries, and the remainder is dropped rather than
+    // rounded — erring towards a copy that looks older than its entries, which is the side
+    // that re-reads the file.
+    assert.ok(staged <= stamp, 'never dated later than the index it came from');
+    assert.ok(stamp - staged < 1_000_000n, 'and within a millisecond of it');
+  });
+
   it('names the files git will not diff as text, so they are never served as text', async () => {
     const before = await snapshotWorkingTree(repo, git);
     assert.ok(before);

@@ -58,6 +58,25 @@ function entriesFrom(value: unknown): ReportEntry[] {
  * looked at instead of being gone with no trace.
  */
 export async function takeReport(root: string, home?: string): Promise<ReportEntry[] | undefined> {
+  const entries = await readReport(root, home);
+  const file = reportPath(root, home);
+  try {
+    await fs.rename(file, `${file}.applied`);
+  } catch {
+    await fs.rm(file, { force: true }).catch(() => undefined);
+  }
+  return entries;
+}
+
+/**
+ * Read the report without consuming it.
+ *
+ * The agent is asked to write this file again each time it settles a note, not once at the
+ * end, so the panel can answer a note seconds after the edit rather than when the whole turn
+ * finishes. That means reading it many times over one run — applying an outcome twice is a
+ * no-op, but consuming it halfway through would throw away everything still to come.
+ */
+export async function readReport(root: string, home?: string): Promise<ReportEntry[] | undefined> {
   const file = reportPath(root, home);
   let raw: string;
   try {
@@ -69,14 +88,28 @@ export async function takeReport(root: string, home?: string): Promise<ReportEnt
   try {
     entries = entriesFrom(JSON.parse(raw));
   } catch {
+    /*
+     * JSON that began and did not finish is a write we caught in the middle — the Stop hook
+     * writes this file and we can be reading while it is still going. Leave it exactly where
+     * it is: consuming it renames the good report out of the way and loses the round with
+     * nothing said. The prose fallback answers this time, and the next apply finds the
+     * finished file.
+     *
+     * Anything that was never JSON — prose, an empty file — is finished and simply not what
+     * was asked for. That one is consumed, or it would be re-read for ever.
+     */
+    if (/^[[{]/.test(raw.trim())) throw new PartialReport(file);
     entries = [];
   }
-  try {
-    await fs.rename(file, `${file}.applied`);
-  } catch {
-    await fs.rm(file, { force: true }).catch(() => undefined);
-  }
   return entries.length > 0 ? entries : undefined;
+}
+
+/** A report that was there but could not be read — very likely still being written. */
+export class PartialReport extends Error {
+  constructor(readonly file: string) {
+    super(`report at ${file} could not be read`);
+    this.name = 'PartialReport';
+  }
 }
 
 /** Throw away a report nobody is going to apply — a new round is starting. */

@@ -4,24 +4,6 @@
  * what it means.
  */
 
-export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'bmp',
-  'svg',
-  'heic',
-  'tif',
-  'tiff',
-]);
-
-export function isImagePath(p: string): boolean {
-  const dot = p.lastIndexOf('.');
-  if (dot < 0) return false;
-  return IMAGE_EXTENSIONS.has(p.slice(dot + 1).toLowerCase());
-}
 
 /** Absolute local paths from a `text/uri-list` payload, in order, without duplicates. */
 export function parseDroppedPaths(raw: string): string[] {

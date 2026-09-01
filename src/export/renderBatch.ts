@@ -4,11 +4,13 @@
  */
 import { RenderConfig } from '../config';
 import {
+  AGENT_TURN_PREFIX,
   compareByPathThenLine,
   formatLineRange,
   GitSnapshot,
   Intent,
   intentOf,
+  isAgentTurn,
   isOpen,
   KIND_META,
   KINDS_BY_WEIGHT,
@@ -40,12 +42,23 @@ export interface RenderedNote {
   body: string;
   /** Full body incl. addenda, ready to emit. */
   bodyWithAddenda: string;
+  /**
+   * The exchange so far, oldest first, with the newest thing *you* said kept out of it.
+   *
+   * Everything used to be flattened into one block under "User comment:", including the
+   * agent's own replies — so it read its own words back as the user's, with the same `↳` in
+   * front of both and nothing saying which part was new.
+   */
+  thread?: Array<{ mine: boolean; text: string }>;
+  /** The newest thing you said: the thing being asked for now. */
+  followUp?: string;
   /** Snippet text to show (possibly with a truncation marker), or undefined. */
   snippet?: string;
   language?: string;
-  suggestion?: string;
   attachments: string[];
   orphaned: boolean;
+  /** The file is gone; the code shown is the note's own record of it. */
+  missing?: boolean;
 }
 
 export interface RenderedFile {
@@ -79,6 +92,11 @@ export interface RenderModel {
 export interface SnippetSource {
   /** Current text of the file, or undefined if unavailable (falls back to stored snippet). */
   textFor(note: ReviewNote): string | undefined;
+  /**
+   * The note's file could not be read at all — deleted or renamed, most often by the agent
+   * itself. Told apart from "unchanged" so the prompt can say which of the two it is.
+   */
+  missing(note: ReviewNote): boolean;
 }
 
 export interface RenderOptions {
@@ -143,8 +161,12 @@ export function extractSnippet(note: ReviewNote, source: SnippetSource | undefin
     if (start > end) return note.anchor.snippet || undefined;
     lines = all.slice(start, end + 1);
   } else {
-    if (!note.anchor.snippet) return undefined;
-    lines = splitLines(note.anchor.snippet);
+    // No current text to read — the file is gone, or the note has lost its lines. What the
+    // note was written about is the record of it, not the anchor's key, which has been
+    // following the code around in the meantime.
+    const stored = note.snapshot?.code ?? note.anchor.snippet;
+    if (!stored) return undefined;
+    lines = splitLines(stored);
   }
   if (lines.length > SNIPPET_MAX_LINES) {
     const more = lines.length - SNIPPET_MAX_LINES;
@@ -153,9 +175,49 @@ export function extractSnippet(note: ReviewNote, source: SnippetSource | undefin
   return lines.join('\n');
 }
 
-/** True when every note in the batch has already been through a round with the agent. */
+/**
+ * True when every note in the batch has already been through a round with the agent.
+ *
+ * `sent` alone is not that. It is also set for a batch that only reached the clipboard, or
+ * that was staged for a session Redline cannot type into — the two routes that mean *nobody
+ * has read it yet*. Send with no reachable session, never paste it, send again, and the prompt
+ * opened by following up on work that was never delivered.
+ */
 export function isFollowUp(notes: readonly ReviewNote[]): boolean {
-  return notes.length > 0 && notes.every((n) => !!n.sent);
+  return notes.length > 0 && notes.every((n) => !!n.sent && !n.sent.route);
+}
+
+/**
+ * Split a note's turns into what has already been said and what is being asked now.
+ *
+ * The last turn is the live one — but only when it is the reader's. A note re-sent after the
+ * agent answered and nothing more was written has no new ask, and every turn is history.
+ */
+export function splitThread(note: ReviewNote): {
+  thread: Array<{ mine: boolean; text: string }>;
+  followUp?: string;
+} {
+  const turns = note.addenda.map((raw) => {
+    const mine = !isAgentTurn(raw);
+    const text = (mine ? raw : raw.slice(AGENT_TURN_PREFIX.length)).trim();
+    return { mine, text };
+  });
+  /*
+   * The newest turn of yours the agent has not seen yet — which is not always the last one.
+   *
+   * The report is read while the run is still going, so an answer to the round that was sent
+   * lands *after* a follow-up typed in the meantime. Taking the last turn then decided there
+   * was no follow-up at all, and the thing actually being asked for rendered as the last line
+   * of "Already said about this note" with no label on it.
+   */
+  const seen = note.sent?.addendaAtSend ?? turns.length;
+  for (let at = turns.length - 1; at >= seen; at -= 1) {
+    const turn = turns[at];
+    if (turn?.mine) return { thread: turns.filter((_, i) => i !== at), followUp: turn.text };
+  }
+  const last = turns[turns.length - 1];
+  if (last?.mine) return { thread: turns.slice(0, -1), followUp: last.text };
+  return { thread: turns };
 }
 
 export function bodyWithAddenda(note: ReviewNote): string {
@@ -167,7 +229,13 @@ export function bodyWithAddenda(note: ReviewNote): string {
   return parts.join('\n');
 }
 
-/** Pick a fence that does not collide with fences inside `code`. */
+/**
+ * A code fence long enough to hold the code inside it.
+ *
+ * Three backticks are not always enough: a snippet containing a fenced block of its own — a
+ * note about a markdown file, or about a doc comment with an example in it — would close the
+ * outer fence early and turn the rest of the prompt into prose.
+ */
 export function fenceFor(code: string): string {
   let longest = 2;
   for (const m of code.matchAll(/`{3,}/g)) longest = Math.max(longest, m[0].length);
@@ -203,10 +271,17 @@ export function buildModel(notes: readonly ReviewNote[], opts: RenderOptions): R
       bodyWithAddenda: bodyWithAddenda(note),
       attachments: note.attachments ?? [],
       orphaned: !!note.anchor.orphaned,
+      ...(() => {
+        const split = splitThread(note);
+        return {
+          ...(split.thread.length > 0 ? { thread: split.thread } : {}),
+          ...(split.followUp ? { followUp: split.followUp } : {}),
+        };
+      })(),
+      ...(opts.source?.missing(note) ? { missing: true } : {}),
     };
     if (snippet !== undefined) r.snippet = snippet;
     if (language !== undefined) r.language = language;
-    if (note.suggestion !== undefined) r.suggestion = note.suggestion;
     return r;
   };
 
@@ -248,7 +323,10 @@ export function buildModel(notes: readonly ReviewNote[], opts: RenderOptions): R
     config: opts.config,
     followUp: isFollowUp(selected),
     ...(opts.reportPath ? { reportPath: opts.reportPath } : {}),
-    threads: selected.some((n) => !!n.sent),
+    // An exchange, not a send. A batch of one new note and one whose report was a bare
+    // `#5 done` — no text, so no addendum — announced "the exchange so far is under each
+    // note" with no exchange under any of them.
+    threads: selected.some((n) => !!n.sent && n.addenda.length > 0),
   };
   if (opts.git) model.git = opts.git;
   return model;

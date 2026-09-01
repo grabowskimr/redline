@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { Logger } from './logger';
-import { ReviewStore } from './store/reviewStore';
-import { isImagePath } from './dnd/dropPayload';
+import { Logger } from '../logger';
+import { ReviewStore } from './reviewStore';
+import { isImagePath } from '../model/images';
+
 
 const MAX_BYTES = 20 * 1024 * 1024;
 /** One drop should not queue hundreds of file reads. */
@@ -48,8 +49,14 @@ export class Attachments {
     await vscode.workspace.fs.writeFile(target, bytes);
     this.store.update(noteId, {
       attachments: [...(note.attachments ?? []), target.fsPath],
-      // Recorded now, because after the next turn there is no way back to it.
-      attachmentTurns: [...(note.attachmentTurns ?? []), note.addenda.length],
+      // Which turn it is evidence for, as an index into `addenda` plus one — 0 is the note
+      // itself. Recorded now, because after the next turn there is no way back to it.
+      //
+      // The +1 is what keeps "attached to the note while drafting it" apart from "attached
+      // while writing the first follow-up". Both happen with `addenda` empty, so a bare count
+      // gave them the same number and the card drew such a picture twice: once under the note
+      // and once inside the follow-up.
+      attachmentTurns: [...(note.attachmentTurns ?? []), note.sent ? note.addenda.length + 1 : 0],
     });
     this.logger.info(`attached ${target.fsPath} to #${note.seq}`);
     return target.fsPath;

@@ -1,1 +1,7 @@
-{ "timeout": 5000, "ui": "bdd" }
+{
+  "timeout": 5000,
+  "ui": "bdd",
+  "require": [
+    "out/test/unit/support/register.js"
+  ]
+}

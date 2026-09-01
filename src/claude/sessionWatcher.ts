@@ -85,6 +85,10 @@ export class SessionWatcher implements vscode.Disposable {
     this.target = undefined;
     this.batchRun = false;
     this.awaitingRunSince = undefined;
+    // The loop can be parked inside a `terminal wait` that runs for minutes. Bumping the
+    // generation stops the next iteration, not the one in flight, so without this a child
+    // outlives the watcher — and toggling `redline.watchSessions` collects one each time.
+    this.killPending();
     this.setState('off');
   }
 
@@ -199,7 +203,7 @@ export class SessionWatcher implements vscode.Disposable {
     });
   }
 
-  /** Kill any `terminal wait` still blocking, so nothing outlives the extension. */
+  /** Kill any `terminal wait` still blocking, so nothing outlives the watch that started it. */
   private killPending(): void {
     for (const child of this.pending) {
       try {
@@ -213,7 +217,6 @@ export class SessionWatcher implements vscode.Disposable {
 
   dispose(): void {
     this.stop();
-    this.killPending();
     this._onRunStarted.dispose();
     this._onDidFinish.dispose();
     this._onDidChangeState.dispose();

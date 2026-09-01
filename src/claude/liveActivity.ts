@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { ReviewRange } from '../git/reviewRange';
 import { HookSignals } from './hookSignals';
 import { touchedSince } from './touched';
 
@@ -38,7 +37,14 @@ export class LiveActivity implements vscode.Disposable {
 
   constructor(
     private readonly signals: HookSignals,
-    private readonly range: ReviewRange,
+    /**
+     * Where the repository is.
+     *
+     * A function rather than the whole `ReviewRange`, which is the only thing this module
+     * wanted from it — and taking the class made `claude/` and `git/` point at each other,
+     * when everything else in `claude/` is about the session and knows nothing about git.
+     */
+    private readonly repoRoot: () => Promise<string | undefined>,
   ) {
     this.subs.push(
       this._onDidChange,
@@ -68,7 +74,7 @@ export class LiveActivity implements vscode.Disposable {
       if (this.state.running) this.update({ running: false });
       return;
     }
-    const root = await this.range.repoRoot();
+    const root = await this.repoRoot();
     if (!root) return;
     const since = (this.runStartedAt || Date.now()) - RUN_GRACE_MS;
     const entries = (await touchedSince(root, since)) ?? [];

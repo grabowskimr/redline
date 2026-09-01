@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 /**
  * Snapshotting the working tree into a real git tree object.
@@ -66,7 +66,19 @@ let sequence = 0;
  */
 function shadowIndexPath(root: string): string {
   const id = createHash('sha1').update(root).digest('hex').slice(0, 16);
-  return path.join(os.tmpdir(), `redline-${id}-${process.pid}-${sequence++}.index`);
+  /*
+   * The random part is the part that matters. Everything else here is derivable — the hash is
+   * of a path an attacker can guess, and pid space is small — and on Linux `os.tmpdir()` is
+   * the world-writable `/tmp`, where anyone can pre-create the name as a symlink. `copyFile`
+   * below follows the destination symlink, so `~/.bashrc` pointed at from `/tmp` would be
+   * truncated and overwritten with a git index. macOS gives each user a private `TMPDIR` and
+   * never had the hole; Linux did.
+   *
+   * The hook (`plugin/hooks/redline-touched.mjs`) builds the same kind of name for the same
+   * reason and carries the same guard; they have to stay in step.
+   */
+  const nonce = randomBytes(8).toString('hex');
+  return path.join(os.tmpdir(), `redline-${id}-${process.pid}-${sequence++}-${nonce}.index`);
 }
 
 /**
@@ -87,7 +99,36 @@ export async function snapshotWorkingTree(
     const real = (await run(['rev-parse', '--git-path', 'index'])).trim();
     if (real) {
       try {
-        await fs.copyFile(path.resolve(root, real), shadow);
+        const from = path.resolve(root, real);
+        await fs.copyFile(from, shadow);
+        /*
+         * ... and give the copy the original's timestamp back.
+         *
+         * Staging skips a file whose stat still matches its index entry, and git's guard
+         * against that missing an edit is the index's own mtime: an entry stamped at or after
+         * it is "racily clean" — modified so soon after it was staged that the stat cannot be
+         * trusted — and git compares the content instead. Copying resets the mtime to now, so
+         * every entry looks safely older than the index it sits in, the guard never fires, and
+         * an edit made in the same second as the last staging is read out of the stat cache:
+         * two snapshots, one tree, a run that changed a file and reported nothing changed.
+         *
+         * Rare — it needs an edit inside that one second — but it lasts, because the cached
+         * stat stays wrong until something refreshes the real index.
+         *
+         * Truncated to the millisecond rather than rounded, which is all `utimes` carries:
+         * rounding puts the copy up to half a millisecond *after* the index it came from, and
+         * that is the same hole again, narrower. Erring early only re-reads a file.
+         */
+        try {
+          const { atimeNs, mtimeNs } = await fs.stat(from, { bigint: true });
+          const seconds = (ns: bigint): number => Number(ns / 1_000_000n) / 1000;
+          await fs.utimes(shadow, seconds(atimeNs), seconds(mtimeNs));
+        } catch {
+        // Its own guard: a failure here means the copy simply keeps the time of the copy,
+        // which is the old behaviour. Folded into the outer `catch` it would have discarded
+        // the copied index and staged the whole repository from empty — seconds of work, on
+        // every snapshot, because a timestamp could not be set.
+        }
       } catch {
         // No index yet (a fresh repository). Staging from empty is slower but correct.
         await fs.rm(shadow, { force: true });

@@ -1,6 +1,7 @@
 import * as assert from 'node:assert/strict';
 import { emptyState, migrate, SchemaError } from '../../model/schema';
 import { note } from './fixtures';
+import { hasUnsentReply } from '../../model/note';
 
 describe('schema.migrate', () => {
   it('accepts a valid v1 document', () => {
@@ -86,5 +87,38 @@ describe('schema v2 → v3', () => {
     assert.equal(kept['included'], undefined);
     assert.equal(kept['side'], undefined);
     assert.equal((kept['anchor'] as Record<string, unknown>)['fileLevel'], undefined);
+  });
+});
+
+describe('the reply waterline on notes that predate it', () => {
+  /*
+   * `addendaAtSend` records how many turns had been written when a note was last sent, and
+   * everything past it is a reply the agent has not seen. Notes written before that field
+   * existed have none, and the predicates then treat every turn as seen — correct for the
+   * turns already there, and wrong for the next one: a follow-up typed on such a note counted
+   * as seen the moment it was typed, so it was never offered for sending and the card never
+   * marked it. Stamping it once at load is what separates "what has already been said" from
+   * "what I am asking now".
+   */
+  it('stamps it once, so a later follow-up still counts as unsent', () => {
+    const legacy = {
+      ...note({ id: 'n1', seq: 1, addenda: ['one', 'Claude: two'] }),
+      // An older note: sent, with turns, and no record of how many had been written.
+      sent: { at: '2026-08-01T00:00:00.000Z', snippetHash: 'h' },
+    };
+    const raw = {
+      version: 3,
+      nextSeq: 2,
+      active: { id: 'b1', name: 'active', createdAt: '2026-08-01T00:00:00.000Z', notes: [legacy] },
+      archive: [],
+    };
+
+    const { state } = migrate(raw);
+    const migrated = state.active.notes[0]!;
+    assert.equal(migrated.sent?.addendaAtSend, 2, 'both existing turns are history');
+    assert.equal(hasUnsentReply(migrated), false, 'nothing is owed on it yet');
+
+    const withReply = { ...migrated, addenda: [...migrated.addenda, 'and one more thing'] };
+    assert.equal(hasUnsentReply(withReply), true, 'and the next thing typed is');
   });
 });

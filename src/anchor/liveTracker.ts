@@ -117,8 +117,9 @@ export class LiveTracker implements vscode.Disposable {
    * Notes whose anchored lines were edited. Two cases:
    *  - the note has a live thread in this editor → VS Code tracked the range through the edit,
    *    so the note is about *these lines* now: refresh the stored snippet from the thread range;
-   *  - no thread → we only know the old range is unreliable: re-resolve the original anchor
-   *    against the new text, and orphan on failure. Never overwrite the anchor with guesswork.
+   *  - no thread → the old range is unreliable: re-resolve the original anchor against the new
+   *    text and re-key the anchor from wherever it matched, so the search key keeps up with the
+   *    code; orphan on failure. Nothing is written unless the key actually matched something.
    */
   private refreshSnippets(document: vscode.TextDocument, ids: string[]): void {
     const text = document.getText();
@@ -143,14 +144,13 @@ export class LiveTracker implements vscode.Disposable {
       }
       const resolved = resolveAnchor(text, note.anchor);
       if (resolved) {
-        const fresh = createAnchor(text, resolved.range);
-        patches.push({
-          id,
-          patch: {
-            range: resolved.range,
-            anchor: { ...note.anchor, contextBefore: fresh.contextBefore, contextAfter: fresh.contextAfter, lineHint: resolved.range.startLine },
-          },
-        });
+        // The whole fresh anchor, snippet and hash included — not just context and hint.
+        // This branch is the one a sent note whose lines have changed always takes: it has no
+        // thread any more, because changing those lines is what took the widget away. Keeping
+        // the old search key here meant the *second* edit was matched against text that had
+        // been gone since the first, so the note orphaned on an edit it should have survived.
+        // What you were looking at is `snapshot.code`, which never moves.
+        patches.push({ id, patch: { range: resolved.range, anchor: createAnchor(text, resolved.range) } });
       } else {
         patches.push({ id, patch: { anchor: { ...note.anchor, orphaned: true } } });
         this.logger.info(`note ${id} orphaned after edit in ${note.path}`);
@@ -207,17 +207,26 @@ export class LiveTracker implements vscode.Disposable {
     const notes = this.notesFor(uri);
     if (notes.length === 0) return;
     const patches: Array<{ id: string; patch: Partial<ReviewNote> }> = [];
+    // One hash of the whole file, not one per note. It normalises and SHA-1s every line, so on
+    // a 3,000-line file with twenty sent notes in it this was twenty milliseconds of the UI
+    // thread on every save — for twenty identical answers.
+    let fileHash: string | undefined;
+    const hashOfFile = (): string => (fileHash ??= hashSnippet(text));
     const sentStatus = (note: ReviewNote, range: SerialRange | undefined, orphaned: boolean): void => {
       if (!note.sent) {
         this.index.clearChangedSinceSent(note.id);
+        this.index.setLinesChanged(note.id, false);
         return;
       }
       // The file hash catches an edit *beside* the note — an agent told to add a comment
       // above a line leaves that line untouched, which the snippet check cannot see.
-      const fileChanged = note.sent.fileHash !== undefined && hashSnippet(text) !== note.sent.fileHash;
+      const fileChanged = note.sent.fileHash !== undefined && hashOfFile() !== note.sent.fileHash;
       const snippetChanged =
         orphaned || !range ? true : hashSnippet(snippetAt(text, range)) !== note.sent.snippetHash;
       this.index.setChangedSinceSent(note.id, fileChanged || snippetChanged);
+      // Kept apart: the widget stays put while the code under it is the code it was written
+      // about, and an edit somewhere else in the file is not that.
+      this.index.setLinesChanged(note.id, snippetChanged);
     };
     for (const note of notes) {
       let resolved: ReturnType<typeof resolveAnchor>;
@@ -233,15 +242,18 @@ export class LiveTracker implements vscode.Disposable {
           resolved.range.startLine !== note.range.startLine ||
           resolved.range.endLine !== note.range.endLine ||
           note.anchor.orphaned;
-        if (!moved) continue;
-        // Keep the stored snippet (it's the user's reference) but refresh context + hint.
-        const fresh = createAnchor(text, resolved.range);
+        // `anchor.snippet` is the *search key*, not the user's reference — that is
+        // `snapshot.code`, which never moves. So it follows the code even when the note has not
+        // moved a line: an agent that rewrites these lines in place leaves the key describing
+        // text that is not in the file any more, and the next edit has nothing to match
+        // against. A plain string compare, not a hash: this runs on every open and every save,
+        // for every note in the file.
+        const drifted = snippetAt(text, resolved.range) !== note.anchor.snippet;
+        if (!moved && !drifted) continue;
+        // `orphaned: false` rather than dropping the field: callers read it as a tri-state.
         patches.push({
           id: note.id,
-          patch: {
-            range: resolved.range,
-            anchor: { ...note.anchor, contextBefore: fresh.contextBefore, contextAfter: fresh.contextAfter, lineHint: resolved.range.startLine, orphaned: false },
-          },
+          patch: { range: resolved.range, anchor: { ...createAnchor(text, resolved.range), orphaned: false } },
         });
         this.logger.trace(`re-anchored ${note.id} via ${resolved.method} → L${resolved.range.startLine + 1}`);
       } else {

@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { touchedLogPath, touchedPathsSince, touchedSince } from '../../claude/touched';
+import { projectSlug, slugInScope } from '../../claude/transcripts';
 
 describe('hook attribution log', () => {
   let home: string;
@@ -100,5 +101,40 @@ describe('what the run has touched so far', () => {
     ]);
     const entries = (await touchedSince(repo, Date.now() - 60_000, home)) ?? [];
     assert.deepEqual(entries.map((e) => e.file), [`${repo}/src/now.ts`]);
+  });
+});
+
+describe('which hook signals belong to this window', () => {
+  /*
+   * The hook writes one directory per working directory, under a single tree that this
+   * extension watches whole. Before this filter, a Claude run in an unrelated repository woke
+   * every open window several times a second — each wake costing a change-summary
+   * recomputation and a session discovery, for work that could not touch anything on screen.
+   */
+  const ROOT = projectSlug('/Users/me/Projects/app');
+
+  it('takes its own', () => {
+    assert.equal(slugInScope(ROOT, [ROOT]), true);
+  });
+
+  it('takes a session started inside it', () => {
+    // The agent run from a package of the monorepo the window is open on.
+    assert.equal(slugInScope(projectSlug('/Users/me/Projects/app/packages/web'), [ROOT]), true);
+  });
+
+  it('takes a session started above it', () => {
+    // The window open on a package, the agent run at the repository root.
+    assert.equal(slugInScope(projectSlug('/Users/me/Projects'), [ROOT]), true);
+  });
+
+  it('ignores a sibling whose name merely starts the same way', () => {
+    // `app` and `app2` share a prefix and share nothing else. This is the case a plain
+    // `startsWith` gets wrong.
+    assert.equal(slugInScope(projectSlug('/Users/me/Projects/app2'), [ROOT]), false);
+    assert.equal(slugInScope(projectSlug('/Users/me/Projects/other'), [ROOT]), false);
+  });
+
+  it('takes everything when there is no folder to compare against', () => {
+    assert.equal(slugInScope(ROOT, []), true);
   });
 });

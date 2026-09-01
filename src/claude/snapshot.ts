@@ -3,14 +3,16 @@ import * as path from 'node:path';
 import { touchedLogPath } from './touched';
 
 /**
- * What the working tree looked like when the current request was submitted.
+ * What the working tree looked like when the current request was submitted — the old way.
  *
- * The Redline hook copies every already-modified file at `UserPromptSubmit`. That is the
- * only way to answer "which lines did *this* run change?" for uncommitted work: a git diff
- * against the base commit is cumulative, so an edit from an earlier run in the same file is
- * indistinguishable from one made moments ago.
+ * A hook before 0.2 copied every already-modified file into a `snapshot/` directory at
+ * `UserPromptSubmit`. The current one writes a git *tree object* instead, which answers the
+ * same question — "which lines did *this* run change?", where a diff against the base commit
+ * is cumulative and cannot tell an edit from an earlier run apart from one made moments ago —
+ * for none of the disk space. See `runTrees.ts`.
  *
- * Absent unless the hook is installed, so every caller has to work without it.
+ * Kept so a run recorded by an older hook still opens. Nothing writes this any more; the
+ * current hook deletes the directory on sight.
  */
 
 export interface RunSnapshot {

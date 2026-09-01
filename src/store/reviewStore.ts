@@ -89,7 +89,7 @@ export class ReviewStore implements Disposable {
     };
     if (input.workspaceFolder !== undefined) note.workspaceFolder = input.workspaceFolder;
     if (input.languageId !== undefined) note.languageId = input.languageId;
-    if (input.suggestion !== undefined) note.suggestion = input.suggestion;
+    if (input.snapshot !== undefined) note.snapshot = { ...input.snapshot };
     if (input.git !== undefined) note.git = input.git;
 
     this.state.active.notes.push(note);
@@ -116,10 +116,15 @@ export class ReviewStore implements Disposable {
   /** Batched update without intermediate events (used by the live tracker). */
   updateMany(patches: Array<{ id: string; patch: Partial<Omit<ReviewNote, 'id'>> }>): void {
     const ids: string[] = [];
+    // Positions once, not a linear scan per patch. Re-anchoring a file patches every note in
+    // it at once, which made this quadratic in the number of notes exactly when there are
+    // most of them.
+    const at = new Map(this.state.active.notes.map((n, i) => [n.id, i]));
     for (const { id, patch } of patches) {
       const note = this.byId.get(id);
       if (!note) continue;
-      const idx = this.state.active.notes.indexOf(note);
+      const idx = at.get(id);
+      if (idx === undefined) continue;
       const next: ReviewNote = { ...note, ...patch, id: note.id, updatedAt: nowIso() };
       for (const k of Object.keys(next) as (keyof ReviewNote)[]) {
         if (next[k] === undefined) delete next[k];
@@ -246,6 +251,7 @@ export class ReviewStore implements Disposable {
     ids: string[],
     targetKey?: string,
     hashes?: ReadonlyMap<string, { snippet: string; file: string }>,
+    route?: NonNullable<ReviewNote['sent']>['route'],
   ): void {
     const at = nowIso();
     this.updateMany(
@@ -261,14 +267,14 @@ export class ReviewStore implements Disposable {
           };
           if (h?.file) sent.fileHash = h.file;
           if (targetKey) sent.target = targetKey;
+          if (route) sent.route = route;
           return { id: n.id, patch: { sent } };
         }),
     );
   }
 
-  /** Archive and remove every sent note (the previous round) — returns how many. */
   /**
-   * Archive the sent round and clear it.
+   * Archive the sent round and clear it. Returns how many notes went.
    *
    * `except` keeps notes that are being sent *again* — a follow-up on an answered note is
    * still that note's conversation, so archiving it mid-thread would delete the thing the

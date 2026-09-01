@@ -1,5 +1,440 @@
 # Changelog
 
+## 1.7.0 — 2026-08-31
+
+Fixes to the note widget and the panel.
+
+- **The widget stops flashing a box that does nothing.** A new note showed a reply bar for as
+  long as it took to read the file and ask git about it — the editor re-renders a thread it has
+  not been told otherwise about, and everything after that point waits on something. The thread
+  is now told before anything that waits, and a test asserts it happens *before* the first
+  `await` rather than after the work.
+- `applyNoteToThread` sets `canReply` on every path, not only for threads that already carry a
+  note.
+- **The session is a toolbar, not a card.** It used to be a rounded, bordered box above a
+  column of rounded, bordered boxes — so the one thing that is not a note looked exactly like
+  one, and you had to read it to find that out. It now spans the panel edge to edge with a rule
+  under it, and reads as chrome at a glance.
+- **Cards end somewhere.** The buttons sit in a band of their own, ruled off and slightly
+  sunken: what you can do is not another paragraph of what was said, and in a column of cards
+  each one otherwise ran into the next. The note itself is now labelled *Your request*, so it
+  reads as one voice in an exchange rather than loose text above an answer.
+- Shorter placeholder in the comment widget: it sits above a box the editor gives a
+  ninety-pixel floor to, and a sentence that long reads as the field's contents.
+- **The widget stays until the code moves.** 1.6.0 took it away as soon as Claude answered.
+  That was wrong for the case it mattered most in — a question changes nothing, so its answer
+  belongs against the lines it is about, and closing the widget sent you to find a card to read
+  a reply about code still in front of you. It now goes when the note's *own* lines differ from
+  the ones that were sent, which is what a change request produces and a question does not. The
+  rule is still one rule: the kinds differ because their effects do.
+- **A kind is an instruction, not a label.** `Kind: question` named the note and permitted
+  everything, and questions came back with the code changed. Every kind now carries its rule on
+  the note itself — questions are answer-only, in those words — and the standing rule for
+  questions is absolute rather than a matter of agreeing first. Adding a kind without writing
+  its rule is a compile error.
+- **`todo` notes are no longer filed under change requests**, where the heading said "work
+  through these in order" and the note said "later work, not now — do not start it". A
+  contradiction in a prompt is read as permission.
+- **Cards have an edge again.** Not the kind-coloured rule that made the panel read as a form —
+  a hairline a step lighter than the card's own fill. A card was only ever as visible as the
+  theme's gap between the sidebar and the editor, and plenty of themes leave no gap at all.
+- The widget's label carries the state that goes with the answer it is now showing — *needs
+  approval*, *turned down*, *on your clipboard* — in the card's own words.
+- **A run's changes could go missing entirely.** The working-tree snapshot stages against a
+  copy of the repository's index, and copying stamped the copy with the time of the copy — so
+  git's guard against its own stat cache never fired, and an edit landing in the same instant
+  as the staging that recorded it was answered from the cache. Two snapshots, one tree, and a
+  run that rewrote a file reported as having changed nothing. About one run in a few hundred,
+  and it lasted, because the stale entry survives until something refreshes the index.
+- The lines-changed signal is announced, and the comment host listens for it. Without both, an
+  agent that edits elsewhere in a file first, or rewrites a note's lines in place, changed
+  nothing any store event would report — and the widget sat on lines it was no longer about.
+
+
+## 1.6.0 — 2026-08-29
+
+**The conversation happens in one place.** A note's widget now leaves the editor as soon as
+Claude answers it, and every follow-up is written on the card. The same rule for every kind,
+questions included: keeping a question's widget because it changed no code was defensible on
+its own and unreadable in a file with four notes in it — two gone, two still there, for a
+reason nothing on screen explained.
+
+- **Removed from the comment widget:** *Follow-up*, *Add Follow-up…*, the reply box's submit
+  and its Cancel, and the Escape binding that closed it. Four commands
+  (`redline.followUpHere`, `redline.addFollowUp`, `redline.replyToNote`, `redline.cancelReply`)
+  are gone. Two of them offered a follow-up at once, in two menus, which is what made the
+  widget look like it was asking twice. Creating a note in the widget is unchanged.
+- **Removed:** `redline.reviseNote` — reachable from no menu, and a worse version of what
+  *Not this* plus a follow-up already does.
+- Fixed: **"Not this" said Claude was working on it** the moment it was clicked. Nothing had
+  been sent — a rejection does not go anywhere until you say what was wrong — and there was no
+  button to send it with either. The card now asks for the reason, offers *Send your reply*
+  once it is written, and says *Claude is having another go…* only once it has gone.
+- **A misclicked rejection has a way back.** *Not this* sits one button from *Approve*; the
+  card now offers *Keep it* until something is written.
+- Fixed: **a screenshot attached to the note appeared twice** once the first follow-up was
+  written — once under the note and once inside the follow-up — because both were recorded
+  with the same number. An attachment now names its turn as an index plus one, with 0 meaning
+  the note itself, and is drawn beside the words it was taken for.
+- Fixed: **a half-written report was consumed and lost.** The Stop hook writes it while the
+  panel may be reading, and unparseable JSON was renamed aside as though it had been applied.
+  A report that began and did not finish is now left where it is and read again next time;
+  prose that was never JSON is still consumed, or it would be re-read for ever.
+- Fixed: **a report that arrived after the sent notes were cleared sat on disk for ever.** It
+  is collected before that exit now, so a new round never opens on top of a stale one.
+- Fixed: **answers naming notes that are no longer there vanished in silence**, and the panel
+  reported that nothing was found. They are counted and named.
+- Fixed: **a note whose file Claude deleted shipped its old code as current.** The prompt says
+  the file is no longer on disk and labels the code as the note's own record of it.
+- Fixed: **a batch over ~120 KB failed obscurely on Linux** when typed into an Orca terminal —
+  a single argument is capped at 128 KiB there. It now says so, and the prompt is on the
+  clipboard either way. macOS has no such cap and is unaffected.
+- Fixed: **the panel could take seconds to show a follow-up you had just written.** Repaints
+  were held back while a box had focus, so the turn appeared only when you next clicked
+  elsewhere. The box and the caret are carried across a repaint instead, and nothing is held.
+- Fixed: **a queued focus could be fired much later, on the wrong card.** Turning a change down
+  arms the panel to put the cursor in that card's box; it is now consumed on the very next
+  repaint whether or not it is used.
+- Fixed: **drag-and-drop feedback was invisible.** `.dropping`, `.replying` and `.busy` had no
+  rules left; the guard that catches this only read literal class attributes and now reads
+  `classList` calls too.
+- **The ⋯ menu and the kind picker work from the keyboard** — arrows, ⏎, Escape, and focus
+  handed back to the control that opened them. The kind picker was not reachable at all.
+- **The session card is two rows**: who Claude is and whether it is listening, then what there
+  is to review and at what scope. *Last* and *All* are *Last run* and *Everything*, in one
+  segmented control.
+- Fixed: **clicking a scope button resized it**, which resized the row, which moved every card
+  underneath. The button keeps its label; the card takes the working colour instead.
+- The card carries the kind as a coloured dot beside the state, a hatched placeholder that is
+  drawn before a screenshot decodes, tighter buttons, and a settled row that names its kind.
+- Fixed: the README's prompt sample swallowed four whole sections inside its code fence — *A
+  second round*, *Going back*, *Approving what changed* and *While it is working* did not
+  render on GitHub at all.
+
+### The widget stops flashing a box that does nothing
+
+- Fixed: **a reply bar appeared under a new note for a moment after you typed it.** The instant
+  the editor accepts what you wrote it re-renders the thread, and a thread it has not been told
+  otherwise about offers to be replied to — so the bar sat there for as long as it took to read
+  the file and ask git about it. It is told at the first instant it can be, before anything that
+  waits, and there is a test that this happens before the first `await` rather than after the
+  work.
+- The widget's placeholder is short now. That change was made once already and silently did not
+  apply; this one is checked.
+
+### Suggested changes are gone
+
+- **Removed the suggested-change feature entirely** — `Add Suggested Change…` from the
+  comment's menu, `Apply Suggested Change` from a card, the field on a note, and the block it
+  wrote into the prompt. It asked you to write the fix yourself and hand it over, which is not
+  what this is for: the point is to say what is wrong and let the agent do it. A note's body
+  can carry a snippet if you want to be that specific.
+- Two knock-on tidies it made possible: the code-fence helper had been lifted into `model/` to
+  break a cycle between the widget and the prompt renderer, and with the widget no longer
+  rendering code that cycle cannot exist — so it lives with the renderer again, where it is
+  used. The subsystem graph stays acyclic.
+
+### A long snippet stops burying the card
+
+- **A snippet longer than three lines folds**, fading out into a *Show all N lines* control
+  that is the whole width of the fade rather than a small target beside it. A note on a whole
+  function is an ordinary thing to write, and thirty lines of it at the top of a card pushed
+  everything that needed answering off the screen.
+- It is folded, not truncated — the code is all there, so opening it is a class rather than a
+  round trip for the rest.
+- Fixed while doing it: **an expanded settled card folded itself back up mid-read.** Which
+  cards are open is the panel's own state and was written as a class on the element, which a
+  repaint destroys — and while an agent is working the panel repaints constantly. Both that and
+  the new fold are held in the script instead, so they survive.
+
+### The note widget looks like a place to type
+
+- Fixed: **the box you write a note in had no background of its own.** Redline was forcing
+  `editorCommentsWidget.replyInputBackground` to fully transparent — right when the widget
+  still had a collapsed *reply* bar, which took the widget's colour rather than sitting on it
+  as a slab. That bar is gone; the only input left is the one you write a new note in, and it
+  was left reading as a hole in the widget rather than a field. The override is removed
+  entirely: your theme decides, as it should, and a test fails if a default like that comes
+  back — one set here overrides every theme a user might install.
+- The placeholder is shorter. It sits above a box the editor gives a 90-pixel floor to, and a
+  sentence that long across an empty field reads as the field's contents.
+- The box cannot be made shorter than that: the floor is a constant in VS Code, not a setting.
+
+### A note without reaching for the mouse
+
+- **`⌘R` opens the note widget on the line the cursor is on** — the same thing the `+` in the
+  gutter does, with a selection if you have one. It asks the editor to open it rather than
+  building the thread itself: the editor already knows where the commentable ranges are, how to
+  focus the box, and what to do when you press Escape. A thread opened here and walked away
+  from would leave an empty marker in the gutter with nothing in it.
+- `⌘⌥M` still types into a prompt, for a narrow screen where the widget takes half the editor.
+- On macOS `⌘R` is *Open Recent*. The binding is scoped to an editor with focus, so it takes
+  over only there; `⌘⇧R` and the command palette still reach the original.
+
+### Screenshots go with the note
+
+- **Deleting a card now throws away its screenshots** — the ones attached to the note and the
+  ones attached to its follow-ups alike. They were swept only when a window opened, so a
+  deleted card's pictures sat in storage until the next restart, and they are the one thing
+  stored here measured in megabytes.
+- The sweep runs once the note is gone for good, after its Undo window closes rather than when
+  it is deleted, and it counts the archive as well as the active batch: a sent note lives on
+  there, *Restore Last Submitted Batch* brings it back whole, and its pictures have to be there
+  when it arrives.
+
+### Documentation, and a tidier tree
+
+- **[`docs/`](docs/) is written for whoever changes this next** — nine pages covering what the
+  parts are and why the boundaries fall where they do, what a note is and which four predicates
+  decide everything the UI shows, how the panel and the plugin work, which test suite to reach
+  for, where a new file goes, and a page of decisions that look wrong until you know why. It
+  exists because the answers were spread across a thousand code comments and one long
+  conversation, and neither survives a fresh session.
+- **One copy of the hook script.** There were two — `resources/` and `plugin/hooks/` — kept
+  identical by a script in `npm test`. Nothing ever read the second one, and both shipped in
+  the `.vsix`.
+- `src/` root is the entry point and the two things everything uses. `attachments.ts` and
+  `migrate.ts` moved into `store/`, which owns what they touch; `dnd/dropPayload.ts` into
+  `view/`, which owns the panel. A fourth file at the root now means a subsystem is missing.
+- The panel's tests were one 1,500-line file named after the smallest thing in it. They are five
+  files by concern, over a shared harness, with the duplicate `describe` names separated.
+- Fixed: **`test:unit` ran stale compiled tests.** Deleting a test file left its compiled copy
+  behind and mocha ran whatever was there, so a test that no longer existed kept passing — and
+  a split file ran twice. It clears `out/test` first now.
+- The `spec/` files each carry a superseded banner. They are the original build handoff, they
+  name commands that were never built, and they read as live contracts.
+
+### Tests for the half of the extension that had none
+
+- **Half the source imported `vscode`, which put it beyond the unit suite** — the four largest
+  files had no test that so much as loaded them, and the integration suite costs half a minute
+  a run and cannot be pointed at one function. A small stub now stands in for the editor, so
+  those modules can be exercised directly. It is deliberately thin: everything in it either
+  does the real thing or records that it was asked, and anything not modelled is simply absent,
+  so a module reaching for it fails loudly rather than quietly seeing `undefined`.
+- **`reviewRange`** — 1,600 lines and the answer to "what changed" — is tested against a real
+  repository built in a temp directory: edited, created, deleted and committed files, a pinned
+  baseline, the untrusted-folder refusal, and one computation shared between callers asking at
+  once. Real git rather than a stub, because everything interesting here is a fact about a
+  repository and a stubbed `git` would only confirm what the test author already believed.
+- **`batchCommands`** — the round trip — is tested where the bugs actually were: a send held
+  while the agent works, two follow-ups held before the first was answered, one card's queue
+  called off without the others, one answer per round however many times the agent rewrites it,
+  a follow-up typed while the report was being read, and an answer for a note that has gone.
+- **`liveTracker`**, behind "notes follow their code": a note that moves when lines are added
+  above it, one orphaned when its code goes and never deleted, one that comes back when the
+  code does, the frozen snapshot left alone as the key follows the file, and no write at all
+  when nothing moved.
+- **`cardsView`**, the panel's host half: what a card is told, and the page's own policy —
+  including that it allows no inline styles, which is the half of that pair that lives here.
+- **`claudeSession`**: what counts as a session that can be typed into, and the paste wrapping
+  that stops a multi-line prompt being read as line after line of typing.
+
+### The queue, and sending a reply in one press
+
+- Fixed: **⌘⏎ did not send.** It recorded the turn and stopped, so the shortcut and the button
+  beside it did different things — and it left the reply sitting on the card needing a second
+  press that the hint next to it said nothing about. It sends, exactly as Send does.
+- **One row for a reply, not two.** *Attach · Send your reply* was a near-identical copy of
+  *Attach · Send* doing the same job, and with both the shortcut and the button now sending, it
+  was hardly reachable at all. A note that arrives carrying an unsent turn — one reopened after
+  being settled, say — starts with the box open instead.
+- **A reply goes in one press.** While the box is open the card shows *Attach* and *Send*
+  instead of *Approve · Not this · Reply* — the verdict buttons are about the answer you were
+  given, and are noise beside a half-written reply. Recording and sending were two steps so a
+  screenshot could be attached in between; that is what *Attach* beside it is for, and making
+  every reply cost two clicks to spare that one was the wrong trade.
+- Fixed: **replying to a second card while Claude was still working on the first typed into the
+  middle of its turn.** Single sends never consulted the queue at all — the one path that most
+  needed it, since replying to several cards in a row is the ordinary way this gets used. They
+  are held now, without a dialog for each: the card says *Queued — goes when Claude finishes*
+  and offers to call it off.
+- Fixed: **the queue could not hold two things.** It was a single `true`, so a second held send
+  set the same flag, and the flush re-derived "everything sendable" from the store — what
+  actually went was whatever qualified at that moment rather than what either send had asked
+  for. It holds ids now, sends exactly those, and drops any note that has gone in the meantime.
+  Several held sends leave as one message, which is what they are to the agent.
+
+### Telling the agent which part is the new question
+
+- **A follow-up is now labelled as one in the prompt.** The note, the agent's own replies and
+  the new ask were flattened into a single block under `User comment:` — so it read its own
+  words back as the user's, both sides carried the same `↳`, and on a note that had been round
+  twice the thing actually being asked for was the last line of a quote with nothing marking
+  it. Each side is named now, and the live ask stands on its own:
+
+  ```
+  User comment: "add a test comment above"
+  Already said about this note, oldest first:
+    - you: added a `// test comment` line above the component declaration in […]
+  Follow-up — this is what to do now: "different comment"
+  ```
+
+  A note re-sent with nothing new written on it has no follow-up line: every turn is history,
+  and saying "do this now" about the last thing the agent itself said would be nonsense.
+
+### The card, tidied
+
+- Fixed: **every `style` attribute in the panel was being thrown away.** The webview's policy
+  has no `'unsafe-inline'` for styles, so the browser dropped all of them without a word — the
+  kind's coloured dot beside the state drew as a six-pixel hole in the padding, and the kind
+  icon was whatever colour it happened to inherit. The ten kinds have classes now, and a test
+  fails if one is added without a colour. The kind is shown once, by the colour of its own icon
+  beside the file — the dot beside the state said the same thing a second time, and left the
+  state word indented for nothing. The reset that strips the host's button chrome off that icon
+  carried a `color: inherit`, which beat the kind's own class two specificity points to one, so
+  the icon was handed straight back the colour of the text around it and every kind looked
+  identical. A test now fails if anything but a kind class sets a colour on it.
+- **The follow-up box is behind Reply.** It sat open under every card that needed an answer,
+  above the buttons, so the first thing a card asked for was typing — when the usual answer is
+  one of the three buttons beneath it. Reply opens it, a ✕ discards it, and pressing Reply
+  again sends what you wrote. It is rendered either way and only hidden, so a repaint cannot
+  lose a half-written reply.
+- **Attach is a word, not a paperclip** nobody could make out at that size, and neither button
+  on a card stretches across the row any more: *Send to Claude* taking every pixel Attach did
+  not made a two-button row read as one enormous button with a chip beside it.
+- A card turned down now offers **Write it** as well as **Keep it** — with the box behind
+  Reply, a repaint would otherwise leave the card asking for a reason with nothing on it that
+  takes one.
+
+### The code on a card is the code you wrote about
+
+- Fixed: **the snippet on a card was live, not the lines you highlighted.** It showed
+  `anchor.snippet`, which looks like a record of what you selected and is not — it is the key
+  the note is found by, and the live tracker rewrites it from the current file every time the
+  code moves, or the note would orphan on the agent's first edit. So the lines under a comment
+  quietly became whatever had just been written there, and a note saying "why this early
+  return?" ended up sitting over the code that replaced it. What you highlighted is now kept
+  separately and never moves, with the line numbers it had at the time; the key goes on
+  following the code, which is its job. Notes written before this fall back to the old
+  behaviour, which is the best that can be said for them.
+- A note whose file is gone now shows what it was written about, rather than the key, in the
+  prompt as well.
+
+### The run's files, where you look for changed files
+
+- **"Claude's last run" in the Source Control view lists what the run changed.** The section
+  was there and always empty: a quick diff can only be contributed by a source control, and one
+  shows up in that view whether or not it has anything in it, so the list was a hole where an
+  obvious one belonged. Clicking a file opens the run's own two sides — the file as the run
+  found it, against the file now — which is *Last run* for one file. Added, deleted and renamed
+  files are all listed, each with the side it is missing stood in for. It is built from the
+  comparison the panel has already computed, so it costs a walk of a map rather than any git,
+  and it does not add to the badge on the activity bar: those are the same files git is already
+  counting.
+
+### Saying who is actually holding the work
+
+- Fixed: **a batch that only reached the clipboard said "Waiting for Claude…".** With no session
+  to type into, the notes go to your clipboard and nobody has read them — but the card claimed
+  the agent had them and was working, which is a lie about where the work is and whose turn it
+  is, on the one screen that exists to answer both. A note now records how it left, and the card
+  says *On your clipboard — paste it into Claude Code*, or *Staged — type the delivery word in
+  your session*, or waits on Claude only when Claude actually has it. It corrects itself the
+  moment the code changes.
+- Fixed: that send also said it twice — "…the notes are on the clipboard. Copied to the
+  clipboard instead."
+- **"Last run" covers the round, not the last message.** The boundary was read from the
+  transcript as "the last thing you asked for", so answering three cards one at a time made
+  each answer its own run and the diff narrowed to whatever the newest one touched — the rest
+  of the round disappeared from it. It now starts at the oldest send you have not settled, and
+  hands the boundary back to the transcript once everything is settled.
+- Fixed: **the answer appeared twice on a card**, in slightly different words. Reading the
+  report while the run is still going means the same note is answered several times as the
+  agent refines what it wrote, and each version was appended as a new turn. There is one answer
+  per round now, replaced rather than added; turns from earlier rounds are never touched.
+- Fixed, at the root this time: **the box around the session switcher was a card's status row.**
+  `working` named two different things — the row a card shows while it waits on Claude, which
+  paints a dark box with eight pixels of padding, and the mark put on a row of controls while
+  its command runs. Marking the controls with it drew that box around the icon and grew the
+  card by the padding, which is why pinning the button's size never helped: nothing was wrong
+  with the button. The two are `working` and `running` now, and the box is scoped to a card.
+  The switcher is also no longer a `<button>`, so there is no host chrome left to inherit; both
+  rows of the card have fixed heights; and the summary line is short enough to fit beside the
+  buttons instead of clipping mid-word and shoving them off the edge.
+
+### Answers while the run is still going
+
+- **A card answers seconds after the edit, not at the end of the turn.** The agent was asked to
+  write its report "when you are done", so a note whose code you could already see change sat
+  saying nothing until the whole batch finished — on a dozen notes, a long time watching a card
+  that plainly knew something had happened. It is now asked to write the file again each time
+  it settles a note, and the panel reads it as it lands. The read never consumes the file: the
+  run is still going and everything after it is still to come, and applying the same outcome
+  twice is a no-op. The end-of-run path takes and clears it exactly as before, so a stale
+  report still cannot survive into the next round. Needs the plugin; without it the outcomes
+  still arrive together at the end.
+- Fixed: **Reply did nothing.** It only moved focus into a box that was already on screen, so
+  typing a follow-up and pressing it changed nothing at all — the words sat there, and the one
+  way to commit them was a keyboard shortcut nobody had been told about. It now takes what you
+  wrote, exactly as ⌘⏎ does.
+- Fixed: **the session switcher still grew when clicked.** Its size was pinned, but hovering
+  and running filled a box behind it that is bigger than the icon. There is nothing for that
+  box to say — the card already takes the working colour — so the icon carries the state in
+  its own colour and paints no box at all.
+- Fixed: **a reply written and not sent said "Sent"**, which is the one thing it is not. It
+  says *Reply not sent*, in the colour the panel uses for "waiting on you".
+- Fixed: **"Waiting for Claude…" under an answer Claude had already given.** Approval waited on
+  a *code change*, so a question answered without touching the code — "the note just says test,
+  so I left it alone" — matched no branch and fell through to the default row.
+- **Settled cards sink to the bottom**, collapse to one line with the code behind the click,
+  carry a ✕, and open onto **Pick this up again** — approving is not the end of the
+  conversation if something occurs to you afterwards.
+- Fixed: the file icon on a card sat on a filled square (it became a `<button>` for the
+  keyboard's sake and arrived wearing the host's chrome); the settled row's icon floated off
+  its line; the session card changed shape as a run went; and a file reference inside an answer
+  had the text cursor, because an anchor with no `href` never gets a pointer.
+
+### Reachable, and honestly described
+
+- **Every command a menu can reach is now reachable, and every one that isn't is gone.**
+  *Re-anchor at Cursor* and *Apply Suggested Change* were both documented in the README and
+  wired to no menu at all — the card told you a note had lost its lines and offered nothing to
+  do about it. Both are on a card's `⋯` now, each only when it applies. Five quick-kind
+  commands that no menu, palette or panel could invoke were removed.
+- Fixed: **the follow-up box said ⏎ and ⏎ inserts a newline.** It says ⌘⏎ (Ctrl+⏎ elsewhere),
+  which is what actually sends.
+- Fixed: **an untrusted folder was told it was "not a git repository"** — a false explanation
+  for the one case that is both common and fixable from the message. It now says what is
+  actually wrong and offers *Manage Trust*.
+- Fixed: **"no reachable Claude Code session found"** explained nothing. It says what would
+  count as one, and that sending works anyway — clipboard, or the plugin from any session.
+- Fixed: **the session card read "not watched" while the plugin was reporting every tool
+  call.** The idle monitor only ever attaches to Orca terminals, so everyone else saw a fault
+  where there was none.
+- **The empty panel offers the two things worth doing** — open the last run's diff, install the
+  plugin — instead of only describing how to leave a note.
+- README: added the missing **Installing** section (there was no way to install the extension
+  from the README at all), corrected the second-round prose to the buttons that exist, the
+  one-click kinds to the five that are there, the `⋯` menu to its real contents, and the
+  "exactly one thing in your editors" claim, which the run gutter has not been true of.
+
+### Speed
+
+- **A run in another repository no longer wakes this window.** The hook writes one directory
+  per working directory and the extension watches the tree whole, so any agent anywhere used
+  to cost every open window a change-summary recomputation and a session discovery, several
+  times a second, for work that could not touch anything on screen. Signals are matched to the
+  folders this window is open on — including a session started in a subdirectory of one, or in
+  a parent of one, which is the monorepo case.
+- **Every git call is bounded.** Only the snapshot ones had a timeout; a `git` that never
+  returned — an index lock, a network filesystem, a wedged `core.fsmonitor` — pinned the
+  in-flight summary for the life of the window, and the panel and status bar simply stopped
+  updating with no way back but a reload.
+- **Anchors: 11.97 ms → 0.06 ms** for twenty notes in a 3,000-line file, on every save, on the
+  UI thread. Every note was re-splitting and re-normalising the whole file for itself, and
+  every *sent* note was hashing it again on top of that.
+- **The panel repaints the header without rebuilding the cards.** The header names the file
+  Claude is writing right now, and it shared one HTML string with the card list — so a run
+  touching thirty files re-parsed every card thirty times, dropping the scroll position each
+  time.
+- **Two fan-outs have a ceiling.** One `git diff` per changed file, all at once, was five
+  hundred git processes for a five-hundred-file run; comparing against the snapshot held both
+  copies of every changed file in memory at the same moment.
+- The panel no longer stats every note's file while it is closed, `updateMany` is no longer
+  quadratic in the number of notes, and stopping a session watch no longer leaves an `orca
+  terminal wait` running for up to five minutes.
+
 ## 1.5.3 — 2026-08-28
 
 - Fixed: **a follow-up you wrote appeared nowhere on the card.** It was kept, and the button

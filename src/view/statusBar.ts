@@ -5,6 +5,7 @@ import { isOpen } from '../model/note';
 import { NoteIndex } from './noteIndex';
 import { ReviewRange } from '../git/reviewRange';
 import { SessionWatcher } from '../claude/sessionWatcher';
+import { HookSignals } from '../claude/hookSignals';
 
 /**
  * `$(comment-discussion) 3  $(git-compare) 12  ⟳ Claude working…`
@@ -16,6 +17,12 @@ export class StatusBar implements vscode.Disposable {
   private rangeLabel = '';
 
   private readonly sub: vscode.Disposable;
+
+  /**
+   * Set after construction, the way the panel's is: the signal channel is created later in
+   * activation than this is.
+   */
+  signals: HookSignals | undefined;
 
   constructor(
     private readonly store: ReviewStore,
@@ -45,7 +52,7 @@ export class StatusBar implements vscode.Disposable {
     const parts = [`$(comment-discussion) ${open}`];
     if (this.changedFiles > 0) parts.push(`$(git-compare) ${this.changedFiles}`);
     if (sent.length) parts.push(`$(send) ${addressed}/${sent.length}`);
-    if (this.watcher.state === 'working') parts.push('$(loading~spin)');
+    if (this.working) parts.push('$(loading~spin)');
     this.item.text = parts.join('  ');
     this.item.command = open > 0 ? 'redline.submit' : 'redline.focusPanel';
 
@@ -56,9 +63,30 @@ export class StatusBar implements vscode.Disposable {
       lines.push(`**${this.changedFiles}** changed file${this.changedFiles === 1 ? '' : 's'} ${this.rangeLabel} — "Review Latest Changes" opens the diff`);
     }
     if (sent.length) lines.push(`${sent.length} sent, ${addressed} addressed`);
-    if (this.watcher.state === 'working') lines.push(`Watching **${this.watcher.label}** — you'll be pinged when it finishes.`);
+    if (this.working) {
+      // The monitor only ever attaches to an Orca terminal, so it has no label for a session
+      // the hook is reporting on.
+      const who = this.watcher.label;
+      lines.push(
+        who
+          ? `Watching **${who}** — you'll be pinged when it finishes.`
+          : `Claude is working — you'll be pinged when it finishes.`,
+      );
+    }
     this.item.tooltip = new vscode.MarkdownString(lines.join('\n\n'));
     this.item.show();
+  }
+
+  /**
+   * Whether to say a run is in flight, decided the same way the panel decides it.
+   *
+   * The panel prefers the hook, which reports from any terminal; the idle monitor is the
+   * fallback and only sees Orca ones. Reading the monitor alone meant that with the plugin
+   * installed and no Orca terminal the panel said "Claude is working…" while the status bar
+   * said nothing at all.
+   */
+  private get working(): boolean {
+    return this.signals?.running === true || this.watcher.state === 'working';
   }
 
   private async refreshRange(): Promise<void> {

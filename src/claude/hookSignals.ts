@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Logger } from '../logger';
+import { projectSlug, slugInScope } from './transcripts';
 
 /**
  * Push notifications from the Redline hook, in place of asking repeatedly whether anything
@@ -17,6 +18,15 @@ import { Logger } from '../logger';
  */
 /** Long enough to absorb a burst of edits, short enough to feel immediate. */
 const TOUCH_DEBOUNCE_MS = 500;
+
+/**
+ * How long to let a report file settle before reading it.
+ *
+ * Short: the whole point is that an answer lands while the agent is still working, and a
+ * second of that is a second of watching a card say nothing. Long enough that a write in two
+ * parts is read once, not twice.
+ */
+const REPORT_DEBOUNCE_MS = 250;
 /** Repeat end-of-run signals inside this window are the same run. */
 const END_RUN_QUIET_MS = 5_000;
 /** A run believed to be in flight for longer than this has lost its end signal. */
@@ -35,11 +45,35 @@ export class HookSignals implements vscode.Disposable {
   /** A new request was submitted, so the run boundary has moved. */
   readonly onDidStartRun = this._onDidStartRun.event;
 
+  private readonly _onDidReport = new vscode.EventEmitter<void>();
+  /**
+   * The agent wrote its report file.
+   *
+   * It is asked to write it again each time it settles a note, not once at the end, so this
+   * fires several times during a run — which is the point: the card can answer a note seconds
+   * after the edit instead of when the whole turn finishes.
+   */
+  readonly onDidReport = this._onDidReport.event;
+
   private readonly subs: vscode.Disposable[] = [];
   private touchTimer: NodeJS.Timeout | undefined;
+  private reportTimer: NodeJS.Timeout | undefined;
   private lastEndRun = 0;
   private runStartedAt = 0;
   private runEndedAt = 0;
+  private everHeard = false;
+
+  /**
+   * Whether the plugin has said anything at all for this folder.
+   *
+   * The panel used to read "not watched" between runs for everyone without Orca, including
+   * people whose plugin was working perfectly — the watcher it was reporting on only ever
+   * attaches to Orca terminals. Having heard from the hook is the honest answer to "is
+   * anything keeping an eye on this".
+   */
+  get reporting(): boolean {
+    return this.everHeard;
+  }
 
   constructor(logger: Logger) {
     const dir = HookSignals.directory();
@@ -53,6 +87,12 @@ export class HookSignals implements vscode.Disposable {
         true, // deletions are housekeeping, not news
       );
       const onEvent = (uri: vscode.Uri): void => {
+        // This workspace's runs only. The hook writes one directory per working directory and
+        // this watches the lot, so a run in an unrelated repository used to wake every open
+        // window: a change-summary recomputation and a session discovery, several times a
+        // second, for work that cannot touch anything on screen.
+        if (!HookSignals.ours(uri)) return;
+        this.everHeard = true;
         // Exact names only. Snapshot copies live in the same tree under percent-encoded
         // names, so a repository file called `touched.jsonl` would otherwise look like one.
         const name = uri.path.slice(uri.path.lastIndexOf('/') + 1);
@@ -72,6 +112,16 @@ export class HookSignals implements vscode.Disposable {
         if (name === 'runs.json' || name === 'manifest.json') {
           this.runStartedAt = Date.now();
           this._onDidStartRun.fire();
+          return;
+        }
+        if (name === 'report.json') {
+          // Written in pieces as the agent works, so a burst is normal. Coalesce it: reading
+          // and applying is cheap, but not free, and half a write is worth nothing.
+          if (this.reportTimer) clearTimeout(this.reportTimer);
+          this.reportTimer = setTimeout(() => {
+            this.reportTimer = undefined;
+            this._onDidReport.fire();
+          }, REPORT_DEBOUNCE_MS);
           return;
         }
         if (name !== 'touched.jsonl') return;
@@ -107,6 +157,16 @@ export class HookSignals implements vscode.Disposable {
     return path.join(home, '.claude', 'redline');
   }
 
+  /** Whether a signal comes from a directory this window is looking at. */
+  static ours(uri: vscode.Uri): boolean {
+    const slug = uri.path.split('/redline/')[1]?.split('/')[0];
+    return !!slug && slugInScope(slug, HookSignals.workspaceSlugs());
+  }
+
+  private static workspaceSlugs(): string[] {
+    return (vscode.workspace.workspaceFolders ?? []).map((f) => projectSlug(f.uri.fsPath));
+  }
+
   /**
    * Make sure the directory exists so the watcher has something to attach to — a watcher on
    * a missing path does not reliably start reporting when it appears. Only when Claude Code
@@ -127,6 +187,8 @@ export class HookSignals implements vscode.Disposable {
   }
 
   dispose(): void {
+    if (this.reportTimer) clearTimeout(this.reportTimer);
+    this._onDidReport.dispose();
     if (this.touchTimer) clearTimeout(this.touchTimer);
     for (const s of this.subs) s.dispose();
     this._onDidTouch.dispose();

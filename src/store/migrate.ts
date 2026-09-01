@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { Logger } from './logger';
+import { Logger } from '../logger';
 
 /** Extension id this one was published under before the rename to Redline. */
 const LEGACY_EXTENSION_ID = 'marcin.local-review';
@@ -59,9 +59,11 @@ export async function migrateLegacyStorage(storage: vscode.Uri, logger: Logger):
     await vscode.workspace.fs.createDirectory(storage);
     await vscode.workspace.fs.writeFile(ours, Buffer.from(JSON.stringify(state), 'utf8'));
 
-    const count = Array.isArray((state as { notes?: unknown[] }).notes)
-      ? ((state as { notes: unknown[] }).notes.length ?? 0)
-      : 0;
+    // `state.active.notes`, where `PersistedState` actually keeps them. A top-level `notes`
+    // key has never existed, so this counted 0 every time and nobody upgrading from the old
+    // extension id was ever told their notes had been carried over.
+    const notes = (state as { active?: { notes?: unknown } }).active?.notes;
+    const count = Array.isArray(notes) ? notes.length : 0;
     logger.info(`migrated ${count} note(s) from ${legacyDir.fsPath}`);
     if (count > 0) {
       void vscode.window.showInformationMessage(

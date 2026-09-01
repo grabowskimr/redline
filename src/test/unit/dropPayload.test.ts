@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
-import { isImagePath, parseDroppedPaths } from '../../dnd/dropPayload';
+import { isImagePath } from '../../model/images';
+import { parseDroppedPaths } from '../../view/dropPayload';
 
 describe('parseDroppedPaths', () => {
   it('reads file URIs, percent-decoded, one per line', () => {

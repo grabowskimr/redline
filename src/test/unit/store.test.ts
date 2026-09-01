@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { input, makeStore } from './fixtures';
-import { hasUnsentReply, isOnDeck, isOpen, ReviewNote } from '../../model/note';
+import { agentTurnThisRound, hasUnsentReply, isOnDeck, isOpen, ReviewNote, roundStart, showsInEditor } from '../../model/note';
 
 import { StoreChange } from '../../store/reviewStore';
 
@@ -34,10 +34,13 @@ describe('ReviewStore', () => {
   });
 
   it('removes undefined optional fields on update', () => {
+    // Setting a field to `undefined` takes it off the note rather than storing the word, which
+    // is what lets a rejection be cleared or a note's git snapshot be forgotten.
     const store = makeStore();
-    const n = store.add(input({ suggestion: 'x' }));
-    const next = store.update(n.id, { suggestion: undefined });
-    assert.ok(next && !('suggestion' in next));
+    const n = store.add(input({ body: 'x' }));
+    store.update(n.id, { rejected: true });
+    const next = store.update(n.id, { rejected: undefined });
+    assert.ok(next && !('rejected' in next));
   });
 
   it('deletes by ids and ignores unknown ids', () => {
@@ -200,7 +203,9 @@ describe('ReviewStore restore after archiveCopy (no duplication)', () => {
     const store = makeStore();
     const a = store.add(input());
     store.markSent([a.id]);
-    store.update(a.id, { sent: { ...store.getById(a.id)!.sent!, outcome: 'done' }, done: true });
+    // What applying a report does: it records the outcome and deliberately does not settle
+    // the note — Claude saying it is finished is a claim about the code, not a verdict on it.
+    store.update(a.id, { sent: { ...store.getById(a.id)!.sent!, outcome: 'done' } });
     assert.equal(hasUnsentReply(store.getById(a.id)!), false, 'nothing said since it was sent');
 
     store.update(a.id, { addenda: ['that is not quite what I meant'] });
@@ -272,6 +277,237 @@ describe('note visibility', () => {
   });
 });
 
+describe('when a note still belongs in the editor', () => {
+  /*
+   * The widget stays until it would be lying.
+   *
+   * It used to go the moment Claude said anything, on the reasoning that the conversation
+   * belongs on the card. That was wrong for the common case: a question changes nothing, and
+   * its answer is most useful sitting against the lines it is about — closing the widget sent
+   * you to find a card to read a reply about code still in front of you.
+   *
+   * What takes it away is the code moving out from under it, which is what a change request
+   * produces and a question does not. One rule, and the kinds differ because their effects do.
+   */
+  const note = (over: Partial<ReviewNote> = {}): ReviewNote =>
+    ({ ...makeStore().add(input({ body: 'x' })), ...over }) as ReviewNote;
+
+  it('shows a note nobody has answered', () => {
+    assert.equal(showsInEditor(note()), true);
+  });
+
+  it('keeps showing one that has been sent but not answered', () => {
+    // Sending is not an answer. Losing the widget the moment you press send would take the
+    // note off the lines while it is being worked on, which is exactly when you want it.
+    assert.equal(showsInEditor(note({ sent: { at: 'now', snippetHash: 'h' } })), true);
+  });
+
+  it('keeps the answer on the lines when the code did not move', () => {
+    const answered = note({ sent: { at: 'now', snippetHash: 'h', outcome: 'answered' } });
+    assert.equal(showsInEditor(answered, false), true);
+  });
+
+  it('takes it out once the code under it has changed', () => {
+    // The answer is about code that is no longer there: the widget would be showing a reply
+    // beside lines it is not about any more.
+    const done = note({ sent: { at: 'now', snippetHash: 'h', outcome: 'done' } });
+    assert.equal(showsInEditor(done, true), false);
+  });
+
+  it('takes out one whose lines are gone entirely', () => {
+    const lost = note({ anchor: { ...note().anchor, orphaned: true } });
+    assert.equal(showsInEditor(lost), false);
+  });
+
+  it('treats unknown as unmoved, so a closed file does not lose its widgets', () => {
+    // Nothing has read the document yet, so nothing knows whether the lines moved. A widget
+    // that vanished for that reason would come back on opening the file, which is worse.
+    assert.equal(showsInEditor(note({ sent: { at: 'now', snippetHash: 'h', outcome: 'done' } })), true);
+  });
+
+  it('takes out one you have marked done, answered or not', () => {
+    assert.equal(showsInEditor(note({ done: true })), false);
+  });
+});
+
+describe('the code a note was written about', () => {
+  /*
+   * A note is a record of what you were looking at. The card used to show `anchor.snippet`,
+   * which looks like that and is not: it is the key the note is found by, and the live tracker
+   * rewrites it from the current file every time the code moves — so the lines under a comment
+   * became whatever the agent had just written, and the question quietly changed.
+   */
+  it('is kept as it was, apart from the key the note is found by', () => {
+    const store = makeStore();
+    const a = store.add({
+      ...input({ body: 'why this early return?' }),
+      snapshot: { code: '  return base;', startLine: 12 },
+    });
+    // What the live tracker does when the agent edits the file under a note.
+    store.update(a.id, {
+      range: { startLine: 40, startChar: 0, endLine: 40, endChar: 0 },
+      anchor: { ...store.getById(a.id)!.anchor, snippet: '  return applyTax(base);' },
+    });
+
+    const after = store.getById(a.id)!;
+    assert.equal(after.snapshot?.code, '  return base;', 'the record does not move');
+    assert.equal(after.snapshot?.startLine, 12, 'nor the line it was on');
+    assert.equal(after.anchor.snippet, '  return applyTax(base);', 'the key follows the code');
+  });
+
+  it('is absent on notes written before it was recorded', () => {
+    // Which is what the card falls back to `anchor.snippet` for.
+    const store = makeStore();
+    const a = store.add(input({ body: 'x' }));
+    assert.equal(store.getById(a.id)?.snapshot, undefined);
+  });
+});
+
+describe('when the round you are working through began', () => {
+  /*
+   * "The last run" is the last thing you asked for, read from the transcript. That is right
+   * until you answer three cards one at a time: each answer becomes its own run, the diff
+   * narrows to whatever the newest one touched, and the rest of the round disappears from it.
+   * A review is a round, not a message.
+   */
+  it('is the oldest send still waiting on you', () => {
+    const store = makeStore();
+    const a = store.add(input({ body: 'a' }));
+    const b = store.add(input({ body: 'b' }));
+    store.update(a.id, { sent: { at: '2026-08-30T10:00:00.000Z', snippetHash: 'h' } });
+    store.update(b.id, { sent: { at: '2026-08-30T10:05:00.000Z', snippetHash: 'h' } });
+    assert.equal(roundStart(store.notes), '2026-08-30T10:00:00.000Z');
+  });
+
+  it('ignores the ones you have settled', () => {
+    const store = makeStore();
+    const a = store.add(input({ body: 'a' }));
+    const b = store.add(input({ body: 'b' }));
+    store.update(a.id, { done: true, sent: { at: '2026-08-30T10:00:00.000Z', snippetHash: 'h' } });
+    store.update(b.id, { sent: { at: '2026-08-30T10:05:00.000Z', snippetHash: 'h' } });
+    assert.equal(roundStart(store.notes), '2026-08-30T10:05:00.000Z', 'the round that is still open');
+  });
+
+  it('is nothing at all once everything is settled', () => {
+    // Which puts the transcript back in charge: with no round open, the last run is again the
+    // last thing you asked for.
+    const store = makeStore();
+    const a = store.add(input({ body: 'a' }));
+    store.update(a.id, { done: true, sent: { at: '2026-08-30T10:00:00.000Z', snippetHash: 'h' } });
+    assert.equal(roundStart(store.notes), undefined);
+    assert.equal(roundStart([]), undefined, 'and with no notes at all');
+  });
+
+  it('ignores notes that were never sent', () => {
+    const store = makeStore();
+    store.add(input({ body: 'a draft' }));
+    assert.equal(roundStart(store.notes), undefined);
+  });
+});
+
+describe('which turn is this round\'s answer', () => {
+  /*
+   * The report is read while the run is still going, so a note is answered several times over
+   * one turn as the agent refines what it wrote. The card showed every version — the same
+   * answer twice, in slightly different words — until this decided which one to replace.
+   */
+  const note = (over: Partial<ReviewNote>): ReviewNote => {
+    const store = makeStore();
+    const a = store.add(input({ body: 'x' }));
+    store.update(a.id, over);
+    return store.getById(a.id)!;
+  };
+
+  it('is nowhere before Claude has said anything', () => {
+    assert.equal(agentTurnThisRound(note({ addenda: [] })), -1);
+    assert.equal(
+      agentTurnThisRound(note({ addenda: ['a follow-up'], sent: { at: 'x', snippetHash: 'h', addendaAtSend: 0 } })),
+      -1,
+    );
+  });
+
+  it('finds the turn Claude added since the last send', () => {
+    const n = note({
+      addenda: ['Claude: an older round', 'my follow-up', 'Claude: this round'],
+      sent: { at: 'x', snippetHash: 'h', addendaAtSend: 2 },
+    });
+    assert.equal(agentTurnThisRound(n), 2);
+  });
+
+  it('will not reach back into a round that is already on the record', () => {
+    // Everything before the send is the history of an earlier exchange. Overwriting any of it
+    // would rewrite what was actually said.
+    const n = note({
+      addenda: ['Claude: an older round', 'my follow-up'],
+      sent: { at: 'x', snippetHash: 'h', addendaAtSend: 2 },
+    });
+    assert.equal(agentTurnThisRound(n), -1);
+  });
+});
+
+describe('a note, all the way round and back again', () => {
+  /*
+   * The two questions that decide what the user sees, at every step of a real review: does the
+   * editor still carry this note, and is a send owed on it? Each was wrong at exactly one step
+   * here, and both were invisible in isolation — the bugs live in the transitions.
+   *
+   * This one is a change request that Claude carries out, so the lines it was written against
+   * move — which is what takes its widget away. A note whose lines survive keeps its widget
+   * through all of this; that is the case above.
+   */
+  it('answers both questions correctly at every step', () => {
+    const store = makeStore();
+    const a = store.add(input({ body: 'rename this prop' }));
+    const now = (): ReviewNote => store.getById(a.id)!;
+    // `moved` is the live tracker's verdict: has the code under this note changed since it was
+    // sent. Nothing has been rewritten yet, so it starts false.
+    let moved = false;
+    const state = (): [boolean, boolean] => [showsInEditor(now(), moved), hasUnsentReply(now())];
+
+    assert.deepEqual(state(), [true, false], 'written, never sent');
+
+    store.markSent([a.id]);
+    assert.deepEqual(state(), [true, false], 'sent, no answer yet — the note is still on its lines');
+
+    store.update(a.id, {
+      addenda: ['Claude: renamed it'],
+      sent: { ...now().sent!, outcome: 'done' },
+    });
+    moved = true; // the rename landed: these are not the lines the note was written against
+    assert.deepEqual(state(), [false, false], 'answered by rewriting the code — the widget goes');
+
+    store.update(a.id, { rejected: true });
+    assert.deepEqual(state(), [false, false], 'turned down, nothing written yet');
+
+    store.update(a.id, { addenda: [...now().addenda, 'not that one'] });
+    assert.deepEqual(state(), [false, true], 'the reason is written and owed');
+
+    store.markSent([a.id]);
+    // The step that used to put the widget back: sending builds a fresh `sent` with no
+    // outcome on it, and the note briefly looked as though it had never been answered.
+    assert.deepEqual(state(), [false, false], 'reason sent — and the widget stays gone');
+
+    store.update(a.id, {
+      addenda: [...now().addenda, 'Claude: fixed'],
+      sent: { ...now().sent!, outcome: 'done' },
+      rejected: undefined,
+    });
+    assert.deepEqual(state(), [false, false], 'answered again');
+
+    store.update(a.id, { done: true });
+    assert.deepEqual(state(), [false, false], 'approved');
+
+    store.update(a.id, { addenda: [...now().addenda, 'one more thing'] });
+    assert.deepEqual(state(), [false, false], 'nothing is owed on a note you have finished with');
+
+    // The step that used to lose it: settling the note moved the sent mark over the turn,
+    // which cannot be undone.
+    store.update(a.id, { done: false });
+    assert.deepEqual(state(), [false, true], 'reopened, and the turn is owed again');
+    assert.ok(now().addenda.includes('one more thing'), 'word for word');
+  });
+});
+
 describe('what counts as an unsent follow-up', () => {
   it('does not treat Claude answering as a follow-up you owe it', () => {
     // The reported bug: applying a report added Claude's turn, which made every finished note
@@ -315,9 +551,8 @@ describe('marking a note done', () => {
     store.update(a.id, { addenda: ['Claude: done — added the comment', 'ok'] });
     assert.equal(hasUnsentReply(store.getById(a.id)!), true, 'yours is unsent');
 
-    // What the ✓ button does.
-    const note = store.getById(a.id)!;
-    store.update(note.id, { done: true, sent: { ...note.sent!, addendaAtSend: note.addenda.length } });
+    // What the ✓ button does, and all it does.
+    store.update(a.id, { done: true });
 
     const after = store.getById(a.id)!;
     assert.equal(after.done, true);
@@ -325,15 +560,20 @@ describe('marking a note done', () => {
     assert.equal(after.addenda.length, 2, 'the turns stay in the thread');
   });
 
-  it('notices a follow-up written after it was marked done', () => {
+  it('gives the unsent follow-up back when the note is reopened', () => {
+    // It used to settle this by moving the sent mark forward over the turn, which cannot be
+    // undone: reopening left the turn in the thread looking delivered, with no way to send it
+    // and nothing saying so. The user believes they asked something Claude never saw.
     const store = makeStore();
     const a = store.add(input());
     store.markSent([a.id]);
-    let note = store.getById(a.id)!;
-    store.update(note.id, { done: true, sent: { ...note.sent!, addendaAtSend: note.addenda.length } });
-    note = store.getById(a.id)!;
-    store.update(note.id, { addenda: [...note.addenda, 'actually, one more thing'] });
-    assert.equal(hasUnsentReply(store.getById(a.id)!), true, 'the conversation is live again');
+    store.update(a.id, { addenda: ['Claude: done — added the comment', 'ok but also this'] });
+    store.update(a.id, { done: true });
+    assert.equal(hasUnsentReply(store.getById(a.id)!), false, 'settled');
+
+    store.update(a.id, { done: false });
+    assert.equal(hasUnsentReply(store.getById(a.id)!), true, 'and owed again, word for word');
+    assert.ok(store.getById(a.id)!.addenda.includes('ok but also this'));
   });
 });
 

@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import { RenderConfig } from '../../config';
 import { createAnchor } from '../../anchor/anchorService';
-import { KIND_META, KINDS_BY_WEIGHT, ReviewNote } from '../../model/note';
+import { KIND_META, KINDS_BY_WEIGHT, NOTE_KINDS, NoteKind, ReviewNote } from '../../model/note';
 import { KIND_GLYPH } from '../../model/kindGlyphs';
 import { buildModel, fenceFor, renderBatch, SnippetSource } from '../../export/renderBatch';
 import { parseReport } from '../../export/report';
@@ -27,7 +27,9 @@ const HOST = [
 const STORE = [...Array.from({ length: 43 }, (_, i) => `// s${i}`), '  const notes = this.state.active.notes.filter(n => n.id !== id);', '  x', '  y'].join('\n');
 
 const files: Record<string, string> = { 'src/comments/commentHost.ts': HOST, 'src/store/reviewStore.ts': STORE };
-const source: SnippetSource = { textFor: (n) => files[n.path] };
+// The fixture files are the ones open; anything else is a file this stub simply does not
+// carry, not a file that has been deleted — the missing-file case has its own test.
+const source: SnippetSource = { textFor: (n) => files[n.path], missing: () => false };
 
 function fixtureNotes(): ReviewNote[] {
   const mk = (path: string, r: ReturnType<typeof range>, over: Partial<ReviewNote>): ReviewNote =>
@@ -38,7 +40,6 @@ function fixtureNotes(): ReviewNote[] {
     mk('src/comments/commentHost.ts', range(141, 149), {
       id: 'n1', seq: 1, kind: 'bug', order: 0,
       body: 'Recreating the thread here makes the widget flicker and lose focus when a note is edited.\nMutate the existing thread instead, and reassign `thread.comments` rather than pushing\ninto it.',
-      suggestion: '  const existing = this.threadsByNoteId.get(note.id);\n  if (existing) {\n    existing.comments = [new NoteComment(note.id, note)];\n    return existing;\n  }',
     }),
   ];
 }
@@ -69,8 +70,104 @@ describe('renderBatch model', () => {
     assert.ok(text.includes('no feedback this time'));
   });
 
+  it('files every kind under the heading that agrees with the rule on the note', () => {
+    /*
+     * The heading and the note used to be able to say opposite things. A `todo` was filed
+     * under *Change requests*, whose standing rule is "work through these in order", while its
+     * own line read "later work, not now — do not start it": one prompt, two instructions, and
+     * a model that has to pick. It picked the section.
+     *
+     * So every kind is checked here rather than the three that happened to be in a fixture,
+     * and adding a kind without deciding where it belongs fails.
+     */
+    const section = (kind: NoteKind): string => {
+      const text = renderBatch([note({ id: kind, seq: 1, kind, body: 'x', path: 'a.ts', range: range(0) })], {
+        config: cfg({ includeSnippet: false, includeGitContext: false }),
+      });
+      return /^## (.+)$/m.exec(text)?.[1] ?? '(none)';
+    };
+
+    const expected: Record<NoteKind, string> = {
+      comment: 'Change requests',
+      bug: 'Change requests',
+      security: 'Change requests',
+      perf: 'Change requests',
+      refactor: 'Change requests',
+      nit: 'Change requests',
+      idea: 'Ideas',
+      question: 'Questions — answer only, change nothing',
+      // Neither is work for this run, and the FYI rule says so: change nothing for these.
+      todo: 'FYI',
+      praise: 'FYI',
+    };
+    for (const kind of NOTE_KINDS) {
+      assert.equal(section(kind), expected[kind], `#{kind} is filed under the wrong heading`.replace('#{kind}', kind));
+    }
+  });
+
+  /** Every kind's rule, spelled out — the prompt's instruction to the agent, kind by kind. */
+  const EXPECTED_RULE: Record<string, string> = {
+    bug: 'something is wrong here. Fix it.',
+    security: 'a vulnerability or unsafe handling of data. Fix it.',
+    perf: 'too slow or too costly. Change it, and say what the cost was.',
+    idea: 'a suggestion, not an instruction. If it is straightforward, do it; otherwise sketch the approach and ask first.',
+    refactor: 'same behaviour, better structure. Do not change what it does.',
+    question:
+      '**answer only. Change nothing** — not the code, not the tests, not a comment. If answering makes you want to change something, say what and why, and stop.',
+    todo: 'later work, not now. Note it and move on; do not start it.',
+    nit: 'a small thing — naming, formatting, style. Fix it if it is genuinely trivial, otherwise leave it.',
+    praise: 'no action. Nothing to do here.',
+  };
+
+  it('gives every kind but `comment` an instruction, not just a name', () => {
+    // `Kind: question` named the note and permitted everything; the rule is what stops a
+    // question coming back with the code changed. A kind with no rule is the old behaviour.
+    for (const kind of NOTE_KINDS) {
+      const text = renderBatch([note({ id: kind, seq: 1, kind, body: 'x', path: 'a.ts', range: range(0) })], {
+        config: cfg({ includeSnippet: false, includeGitContext: false }),
+      });
+      const line = /^Kind: .*$/m.exec(text)?.[0];
+      if (kind === 'comment') {
+        assert.equal(line, undefined, 'a plain comment says what it wants in its own words');
+        continue;
+      }
+      // Pinned, not shape-matched. `^Kind: <kind> — <a sentence>$` passed with every rule
+      // replaced by "x." and with two kinds' rules swapped — the one thing this test exists to
+      // stop, since a kind's rule *is* the instruction the agent follows.
+      assert.equal(line, `Kind: ${kind} — ${EXPECTED_RULE[kind]}`, `${kind}'s rule is the one it should be`);
+    }
+  });
+
+  it('reads a report line however the model has formatted it', () => {
+    /*
+     * These lines are written as prose and formatted like prose. `**#1 done** — …` left a
+     * stray `**` glued to the front of the answer, which is what showed up in the widget; and
+     * `#1 **done** — …`, emphasis around the outcome word, did not match at all — a note
+     * reported as unanswered while the work was done, which is the failure this protocol
+     * exists to prevent.
+     */
+    const one = (line: string): { outcome: string; text?: string } | undefined => parseReport(line)[0];
+
+    for (const line of [
+      '#1 done — added a comment',
+      '**#1 done** — added a comment',
+      '#1 **done** — added a comment',
+      '- **#1 done**: added a comment',
+      '`#1 done` — added a comment',
+    ]) {
+      assert.deepEqual(one(line), { seq: 1, outcome: 'done', text: 'added a comment' }, line);
+    }
+
+    // What the formatting is *part of* stays. A wrapper closes what it opened; a word in the
+    // middle of a sentence does not.
+    assert.equal(one('#2 answer: *Renamed* the prop')?.text, '*Renamed* the prop');
+    assert.equal(one('#3 answered — see `foo.ts:12`')?.text, 'see `foo.ts:12`', 'the link survives');
+    assert.equal(one('#4 done — `wrapped entirely`')?.text, 'wrapped entirely');
+    assert.equal(one('#5 done')?.text, undefined, 'nothing to say is not the empty string');
+  });
+
   it('snippet truncation', () => {
-    const src: SnippetSource = { textFor: () => HOST };
+    const src: SnippetSource = { textFor: () => HOST, missing: () => false };
     const big = note({ path: 'a.ts', range: range(0, 99) });
     const m2 = buildModel([big], { config: cfg(), source: src });
     const lines = (m2.files[0]?.notes[0]?.snippet ?? '').split('\n');
@@ -80,8 +177,22 @@ describe('renderBatch model', () => {
 
   it('falls back to the stored snippet when the file is unavailable', () => {
     const n = note({ path: 'gone.ts', anchor: { ...note().anchor, snippet: 'stored text' } });
-    const m = buildModel([n], { config: cfg(), source: { textFor: () => undefined } });
+    const m = buildModel([n], { config: cfg(), source: { textFor: () => undefined, missing: () => false } });
     assert.equal(m.files[0]?.notes[0]?.snippet, 'stored text');
+  });
+
+  it('says the file is gone rather than showing its old code as current', () => {
+    // Claude deletes or renames a file it was asked about — the usual case, since a note is
+    // often what asks for it. The note kept its snippet and the prompt labelled it "Code:",
+    // so the next round read as a request to go and edit a file that is not there.
+    const n = note({ path: 'gone.ts', anchor: { ...note().anchor, snippet: 'stored text' } });
+    const src: SnippetSource = { textFor: () => undefined, missing: () => true };
+    const m = buildModel([n], { config: cfg(), source: src });
+    assert.equal(m.files[0]?.notes[0]?.missing, true);
+    const text = renderBatch([n], { config: cfg(), source: src });
+    assert.match(text, /no longer on disk/);
+    assert.match(text, /Original code:/);
+    assert.doesNotMatch(text, /^Code:$/m);
   });
 
   it('orphans go to the trailing section with stored snippet', () => {
@@ -110,12 +221,15 @@ describe('claude-prompt formatter (default)', () => {
       text,
       [
         'I reviewed the generated code and have some feedback: 2 change requests, 1 question.',
-        'Work through the change requests in order; if one is unclear or you disagree, say so and ask before changing it. Answer the questions first — only change code for a question if we agree.',
+        'Work through the change requests in order, following the rule on each note — where a note says you may leave something, leaving it is an answer. If one is unclear or you disagree, say so and ask before changing it. ' +
+          '**Questions are answer-only. Do not change any code for a question** — not even something you are confident ' +
+          'about, and not a comment or a test. If a question makes you want to change something, say what you would ' +
+          'change and why, and leave it.',
         '',
         '## Change requests',
         '',
         '### #1 — src/comments/commentHost.ts · Lines 142-150',
-        'Kind: bug',
+        'Kind: bug — something is wrong here. Fix it.',
         'Code:',
         '```ts',
         '  const thread = controller.createCommentThread(uri, range, []);',
@@ -134,17 +248,10 @@ describe('claude-prompt formatter (default)', () => {
         'Mutate the existing thread instead, and reassign `thread.comments` rather than pushing',
         'into it.',
         '"""',
-        'Suggested change:',
-        '```ts',
-        '  const existing = this.threadsByNoteId.get(note.id);',
-        '  if (existing) {',
-        '    existing.comments = [new NoteComment(note.id, note)];',
-        '    return existing;',
-        '  }',
-        '```',
         '',
         '### #3 — src/store/reviewStore.ts · Lines 44-46',
-        'Kind: nit',
+        'Kind: nit — a small thing — naming, formatting, style. Fix it if it is genuinely trivial, '
+          + 'otherwise leave it.',
         'Code:',
         '```ts',
         '  const notes = this.state.active.notes.filter(n => n.id !== id);',
@@ -153,10 +260,11 @@ describe('claude-prompt formatter (default)', () => {
         '```',
         'User comment: "`delete` takes an array of ids elsewhere in this class — make this consistent."',
         '',
-        '## Questions',
+        '## Questions — answer only, change nothing',
         '',
         '### #2 — src/comments/commentHost.ts · Line 203',
-        'Kind: question',
+        'Kind: question — **answer only. Change nothing** — not the code, not the tests, not a comment. ' +
+          'If answering makes you want to change something, say what and why, and stop.',
         'Code:',
         '```ts',
         '  this.threads.clear();',
@@ -180,7 +288,7 @@ describe('claude-prompt formatter (default)', () => {
       text,
       [
         'I reviewed the generated code and have some feedback: 2 change requests.',
-        'Work through the change requests in order; if one is unclear or you disagree, say so and ask before changing it.',
+        'Work through the change requests in order, following the rule on each note — where a note says you may leave something, leaving it is an answer. If one is unclear or you disagree, say so and ask before changing it.',
         '',
         '## Change requests',
         '',
@@ -194,12 +302,43 @@ describe('claude-prompt formatter (default)', () => {
     );
   });
 
+  it('asks for the report as the run goes, not once at the end', () => {
+    // A card whose code has visibly changed used to sit saying nothing until the whole turn
+    // finished — on a batch of a dozen notes, a long time watching nothing happen. The panel
+    // reads this file while the agent works, so the agent is asked to keep it up to date.
+    const text = renderBatch([note({ body: 'rename it' })], {
+      config: cfg({ requestReport: true }),
+      reportPath: '/tmp/report.json',
+      now,
+    });
+    assert.match(text, /Write it as you go, not once at the end/);
+    assert.match(text, /every note you have settled so far/);
+    assert.match(text, /read while you work/);
+  });
+
+  it('scopes the change requests it does have to the files they point at', () => {
+    const text = renderBatch([note({ kind: 'bug', body: 'wrong', path: 'src/a.ts' })], {
+      config: cfg({ includeGitContext: false, includeSnippet: false, scopeGuard: true }),
+      now,
+    });
+    assert.match(text, /Only touch the files these notes point at/);
+  });
+
   it('questions-only, scope guard and report-back footer', () => {
     const text = renderBatch([note({ kind: 'question', body: 'why?' })], {
       config: cfg({ includeGitContext: false, includeSnippet: false, scopeGuard: true, requestReport: true }),
       now,
     });
-    assert.ok(text.startsWith('I reviewed the generated code and have some feedback: 1 question.\nPlease answer each question before changing anything. Only touch the files listed below'));
+    assert.ok(
+      text.startsWith(
+        'I reviewed the generated code and have some feedback: 1 question.\n**Questions are answer-only.',
+      ),
+      text.slice(0, 200),
+    );
+    // The scope guard is *absent* here, and that is the point: it used to say "only touch the
+    // files listed below" on a batch that asks for no file to be touched at all, next to a rule
+    // saying not to change any code. It is only rendered where something might be changed.
+    assert.doesNotMatch(text, /Only touch the files/, 'nothing to scope on a questions-only batch');
     assert.ok(text.includes('## When you are done'));
     // The format asks for a sentence with every outcome: the line is kept beside the note as
     // Claude's side of the conversation, and a bare "done" leaves nothing to read there.
@@ -210,7 +349,7 @@ describe('claude-prompt formatter (default)', () => {
 
   it('praise is FYI', () => {
     const text = renderBatch([note({ kind: 'praise', body: 'nice' })], { config: cfg({ includeGitContext: false, includeSnippet: false }), now });
-    assert.ok(text.includes('1 FYI.\nThe FYI notes need no action.'));
+    assert.ok(text.includes('1 FYI.\nThe FYI notes need no action — do not change anything for them.'));
     assert.ok(text.includes('## FYI'));
   });
 });
@@ -239,14 +378,14 @@ describe('idea kind', () => {
 
 describe('prompt escaping and context', () => {
   it('uses 4-backtick fences when the code contains 3-backtick fences', () => {
+    // A note on a markdown file, or on a doc comment with an example in it: three backticks
+    // would close the outer fence early and turn the rest of the prompt into prose.
     const n = note({
-      suggestion: 'before\n```js\nx\n```\nafter',
       anchor: { ...note().anchor, snippet: '```\ncode\n```' },
       languageId: 'typescript',
     });
     const text = renderBatch([n], { config: cfg(), now });
     assert.ok(text.includes('````ts\n```\ncode\n```\n````'), 'snippet fence widened');
-    assert.ok(text.includes('````ts\nbefore\n```js\nx\n```\nafter\n````'), 'suggestion fence widened');
     assert.equal(fenceFor('``````x'), '```````');
   });
 
@@ -300,7 +439,7 @@ describe('kind glyphs', () => {
 });
 
 describe('continuing a conversation on a note', () => {
-  const source: SnippetSource = { textFor: () => undefined };
+  const source: SnippetSource = { textFor: () => undefined, missing: () => false };
   const sent = { at: '2026-08-26T10:00:00.000Z', snippetHash: 'h' };
 
   it('includes a note that has already been sent when asked to', () => {
@@ -327,10 +466,12 @@ describe('continuing a conversation on a note', () => {
     const out = renderBatch([answered], { config: cfg(), source, includeInactive: true });
     assert.match(out, /Following up on feedback you have already worked on/);
     assert.doesNotMatch(out, /I reviewed the generated code and have some feedback/);
-    // The whole exchange travels with it, oldest first.
-    const claudeAt = out.indexOf('Claude: I used a throwaway key.');
-    const mineAt = out.indexOf('That is not what I meant');
-    assert.ok(claudeAt > 0 && mineAt > claudeAt, 'the exchange is present and in order');
+    // The whole exchange travels with it, oldest first, each side named, and the newest thing
+    // the reader said set apart as the thing to act on.
+    const saidAt = out.indexOf('- you: I used a throwaway key.');
+    const askAt = out.indexOf('Follow-up — this is what to do now:');
+    assert.ok(saidAt > 0 && askAt > saidAt, 'the exchange is present and in order');
+    assert.match(out, /That is not what I meant — drop the key entirely\./);
   });
 
   it('still reads as a fresh review when any note is new', () => {
@@ -361,7 +502,13 @@ describe('a batch that mixes new notes with replies', () => {
     const text = build([fresh, answered]);
     assert.match(text, /The exchange so far is under each note, newest last\./);
     assert.match(text, /Some of these continue notes you have already worked on\./);
-    assert.match(text, /↳ Claude: removed it/, 'and the thread itself is in there');
+    // Labelled by speaker, and the live ask marked as the thing to act on. All of it used to
+    // be flattened under "User comment:", the agent's own replies included, with the same `↳`
+    // in front of both sides and nothing saying which part was new.
+    assert.match(text, /Already said about this note, oldest first:/);
+    assert.match(text, /- you: removed it/, 'its own words, marked as its own');
+    assert.match(text, /Follow-up — this is what to do now: "the other one too, please"/);
+    assert.doesNotMatch(text, /↳ Claude:/, 'no raw prefix, and no unlabelled arrow');
   });
 
   it('still says "following up" when every note is one', () => {

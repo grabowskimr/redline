@@ -7,22 +7,40 @@ wrong, request changes. Redline gives you that same loop when the author is an a
 mark up its work in the editor, and the marked-up copy goes back to the Claude Code session
 running in this folder.
 
-Notes live **only on your machine** — no network, no telemetry, no accounts. The extension
-adds exactly one thing to your editors: the `+` in the gutter for leaving a note. Changed
-lines stay VS Code's own git indicators.
+Notes live **only on your machine** — no network, no telemetry, no accounts. The extension adds
+one thing to every editor — the `+` in the gutter for leaving a note — and, while
+`redline.runGutter` is on, a second set of marks for what the last run changed, under
+*Claude's last run* in the Source Control view. Your uncommitted changes stay VS Code's own
+git indicators.
 
+
+## Installing
+
+Redline is not on the Marketplace. Build it from this repository and install the `.vsix`:
+
+```sh
+git clone https://github.com/grabowskimr/redline.git
+cd redline
+npm install
+npm run package                       # → redline-<version>.vsix
+code --install-extension redline-*.vsix
+```
+
+Then reload the window. Requires VS Code 1.90 or newer, macOS or Linux, and `git` on `PATH`.
+The **Claude Code plugin** below is optional and installed separately — everything works
+without it, less precisely.
 
 ## The loop
 
 **1. Claude works** — in a terminal, in Orca, wherever. You don't need VS Code open.
 
-**2. You open VS Code** and click **Last** on the session strip: a PR-style multi-file diff
+**2. You open VS Code** and click **Last run** on the session card: a PR-style multi-file diff
 of everything that changed since the session started, including work it committed. `⌥F7` /
-`⇧⌥F7` walk hunk by hunk. **All** widens the range to every change since the base.
+`⇧⌥F7` walk hunk by hunk. **Everything** widens the range to every change since the base.
 
 
 **3. You leave notes** on the lines that need work — hover the gutter for `+`, or select
-lines and press `⌘⌥M`. The widget's toolbar carries the five kinds worth one click — change
+lines and press `⌘R`. The widget's toolbar carries the five kinds worth one click — change
 request, bug, question, idea, refactor — with the rest behind **Set Kind…**, plus **send this
 note** and **remove it**, so a single piece of feedback never needs the panel.
 
@@ -68,12 +86,25 @@ Code:
 ```
 User comment: "Why return early here rather than falling through to the tax step?"
 
+## When you are done
+
+Reply with one line per note so I can track it, using exactly this format:
+`#<number> done — <what you changed>` · `#<number> skipped — <why>` · `#<number> answer: <your answer>`
+
+Keep each line to one sentence. It is shown beside the note in a narrow panel, so say what changed and stop — "done" alone leaves nothing to read next to code that moved, and three paragraphs are worse than one line. Point at code as `[file.ts:12](path/to/file.ts)`, which is rendered as a short link.
+````
+
+</details>
+
+
 ## A second round
 
 Send a batch, read the answers, reply to the ones that need more — then send **all** of those
-follow-ups in one message, the same way you sent the first round. The **send** button in the
-toolbar comes back as soon as any follow-up is waiting, and the *Sent to Claude* section grows
-a **send N follow-ups** button beside *clear sent*.
+follow-ups in one message, the same way you sent the first round. **Reply** on a card opens a
+box; **Send** — or `⌘⏎` — sends that one. The toolbar's **send** comes back as soon as any
+follow-up is waiting and takes the lot, and `⌘⌥S` does the same. Sending while Claude is
+working holds the notes instead: the card says so, and they all go together the moment the run
+ends.
 
 Each follow-up carries its own thread — the note, Claude's answer, your reply — so it lands
 with the context it is replying to, and the whole batch goes to the session that conversation
@@ -90,20 +121,32 @@ attribute everything since to it.
 ## Approving what changed
 
 Claude reporting a note as finished is a claim about the code, not a verdict on it — so the note
-moves to **waiting for approval** rather than closing itself. Its before and after stay on the
-card, and two buttons answer it without typing: 👍 closes the note, 👎 reopens it and opens the
-follow-up box.
+moves to **needs approval** rather than closing itself. Its before and after stay on the card,
+and three buttons answer it: **Approve** settles it, **Not this** turns the change down and asks
+you what was wrong, **Reply** carries on the conversation. All three are on the card, so nothing
+asks you to type in two places — while the widget in the editor keeps showing the answer beside
+the code it is about, until that code changes.
 
 With the plugin installed the outcomes arrive as a file rather than as prose. The prompt names a
 path and asks for JSON; Redline reads that and falls back to scanning the reply for `#12 done`
 lines only when there is no file. Reading outcomes out of prose is what produced "0 of 3
 addressed" with all three addressed.
 
+**Answers arrive as they happen, not at the end of the turn.** The agent is asked to write that
+file again each time it settles a note, and Redline reads it while the run is going — so a card
+whose code you can already see change answers within a second or two of the edit, rather than
+waiting for the whole batch to finish. Without the plugin there is no file to watch, and the
+outcomes still arrive together when the run ends.
+
 ## While it is working
 
 The last run's changes appear in the editor gutter, beside the git extension's own marks. Those
 answer "what is uncommitted", which in a worktree an agent has worked in for an hour is nearly
 everything; these answer "what did the last run change in the file I am looking at".
+
+The same run also lists its files in the Source Control view, under **Claude's last run** —
+clicking one opens that file as the run found it beside the file now, which is *Last run* for a
+single file. Turn both off with `redline.runGutter`.
 
 The panel says what the session is working on as it goes — the file it is writing, and how many
 it has touched — taken from the plugin's own record rather than from the session. A terminal in
@@ -112,27 +155,19 @@ another window shows this and the panel could not.
 Sending while Claude is mid-turn offers to wait: notes dropped into the middle of a turn are as
 likely to be ignored as read, and queued ones go the moment the run ends.
 
-## When you are done
-
-Reply with one line per note so I can track it, using exactly this format:
-`#<number> done — <what you changed>` · `#<number> skipped — <why>` · `#<number> answer: <your answer>`
-
-Keep each line to one sentence. It is shown beside the note in a narrow panel, so say what changed and stop — "done" alone leaves nothing to read next to code that moved, and three paragraphs are worse than one line. Point at code as `[file.ts:12](path/to/file.ts)`, which is rendered as a short link.
-````
-
-</details>
-
 
 **5. Keep talking about it.** A note is a conversation, not a one-shot. Claude is asked to say
 what it did in each report line — "done — moved applyDiscount above the return" rather than a
-bare "done" — and that becomes its turn beside your note. The note stays on its line, so you
-can click the marker and add a follow-up. It goes live again (**✎ follow-up not sent**), so you
-can attach a screenshot first, and **➤** sends the whole exchange: your original note, Claude's answer, your correction. That repeats until you
-remove the note. Useful when it changed the right file for the wrong reason.
+bare "done" — and that becomes its turn on the card. The widget stays on the lines while the
+code under it holds still, so the answer is readable where the code is; the whole exchange is
+also on the card, with a box behind its **Reply** button. **Send**, or `⌘⏎`, sends the exchange entire: your original
+note, Claude's answer, your correction — with **Attach** beside it if a screenshot says it
+better. That repeats until you approve or remove the note. Useful when it changed the right
+file for the wrong reason.
 
-**6. Track the round.** Sent notes stay in the panel with a live badge — **✏️ code changed**
-or **⏳ not addressed yet**. When Claude replies with `#4 done` / `#4 skipped — reason` /
-`#4 answer: …`, **Apply Claude's Report** marks them ✅ / ⛔ / 💬 and attaches its answers to
+**6. Track the round.** Sent notes stay in the panel with a live state — **Sent** while Claude
+is working, **Needs approval** once it has answered. When Claude replies with `#4 done` /
+`#4 skipped — reason` / `#4 answer: …`, **Apply Claude's Report** attaches its answers to
 the cards.
 
 The report is read from the session transcript rather than the terminal: an agent TUI
@@ -146,11 +181,13 @@ not in it. The terminal and the clipboard are fallbacks.
 - **A trusted folder.** Reviewing changes runs git, and a repository defines configuration and
   filters that git executes — so none of it runs in a restricted window. Notes still work;
   change detection resumes when you trust the folder.
-- **macOS and Linux** for finding a session to send to: that reads the process table. Notes,
-  the panel and the whole review side work anywhere, and with the plugin installed a batch can
-  be delivered on any platform by typing one word.
+- **macOS and Linux.** Finding a session to send to reads the process table, and the plugin's
+  hooks are shell scripts. Notes, the panel and the whole review side work anywhere; on
+  Windows every send goes to the clipboard for you to paste, which is the fallback the rest of
+  the product is built around anyway.
 - **One repository per window.** In a multi-root workspace Redline reviews the first folder
-  that is a git repository. Notes are grouped per folder; the change range is not.
+  that is a git repository. Every card names its own file; the change range covers that one
+  repository.
 - **One session at a time per worktree.** Two Claude Code sessions working in the *same*
   worktree overwrite each other's run markers; Redline notices the mismatch and falls back to
   the slower, wider answer rather than reporting a run built from both. Separate worktrees are
@@ -176,9 +213,11 @@ Because a commit is always compared against the working tree, this works when VS
 opened long after the agent finished. Modified, staged, newly added, deleted, renamed and
 **committed-during-the-session** files all count. Gitignored files do not.
 
-**Last** narrows that to your most recent request. The boundary is the last thing *you* asked
-for, read from the session transcript, so three requests a few minutes apart stay three
-separate reviews.
+**Last run** narrows that to the round you are working through: everything Claude has done
+since the oldest note you have not settled yet was sent, however many messages that took. So
+answering three cards one at a time still shows all of it, rather than narrowing to whichever
+answer went last. Once everything is approved the round closes, and the boundary goes back to
+being the last thing *you* asked for, read from the session transcript.
 
 With the plugin installed, "the last run" is a comparison between two snapshots of the working
 tree — see below. Without it, the run is cut where the agent was idle longer than
@@ -216,7 +255,8 @@ claude plugin install redline@redline
 ```
 
 Restart Claude Code. `claude plugin details redline` shows four hooks and **~0 tokens added to
-every session** — they are harness-only and never enter the model's context.
+every session** — nothing is added to a turn unless you have staged a batch and typed the
+delivery word, which is the one case where the whole point is to put it in front of the model.
 
 **What it buys you**
 
@@ -231,7 +271,7 @@ every session** — they are harness-only and never enter the model's context.
   About 20 ms, and it reports added, deleted, modified and renamed exactly — no timestamps, no
   separate listing for untracked files, no guessing who wrote what. This is what makes a file
   the run *created* appear, alongside the file whose import it updated.
-- **Line-level accuracy.** **Last** compares each file against the snapshot, not against the
+- **Line-level accuracy.** **Last run** compares each file against the snapshot, not against the
   base commit — so editing line 2 in one run and line 4 in the next shows line 4 alone. Git
   cannot do this on its own: a diff against a base commit is cumulative.
 - **A panel that keeps up.** Redline watches the hook's own directory, so figures move about
@@ -241,7 +281,8 @@ every session** — they are harness-only and never enter the model's context.
   made Enter unreliable. With it, the prompt is written to disk and a short token is typed;
   the hook injects the feedback into the model's context.
 
-**What it costs.** The hook writes only to `~/.claude/redline/<slug>/`, never into your
+**What it costs.** The hook writes to `~/.claude/redline/<slug>/` and, while a snapshot is
+being taken, a scratch index in your temp directory that it removes afterwards. Never into your
 repository. It answers immediately and does its work detached, so it adds no measurable time
 to a tool call — apart from the two snapshots, which have to be taken at the moment they
 describe. A snapshot is about 1.3 s on a 42k-file repository: the repository's own index is
@@ -253,15 +294,17 @@ The tree and blob objects land in your repository's object store, unreachable, t
 creates no refs, branches or commits, and Redline's side never blocks the panel on a snapshot:
 it uses the hook's, or takes one in the background and refreshes when it lands.
 
-**Editing `settings.json` by hand still works** and is what earlier versions asked for. If you
-did that, remove those entries once the plugin is installed, or every hook runs twice —
-**Redline: Set Up Claude Code Plugin** checks for exactly that and tells you.
+**Editing `settings.json` by hand still works** and is what earlier versions asked for: point
+the four hooks at `plugin/hooks/redline-touched.sh` from a clone of this repository. If you did
+that, remove those entries once the plugin is installed, or every hook runs twice — **Redline:
+Set Up Claude Code Plugin** checks for exactly that and tells you.
 
 ## Notes
 
-- **Kinds** shape how the agent treats a note. The widget has one-click 🐞 bug · 💭 question ·
-  💡 idea; **Set Kind…** lists them all. Prefixes work too: `? why`, `! crash`, `* what if`,
-  `~ rename`, `+ nice`.
+- **Kinds** shape how the agent treats a note. The widget has one-click 💬 change request ·
+  🐞 bug · 💭 question · 💡 idea · 🔧 refactor; **Set Kind…** lists them all, and so does the
+  coloured dot on a card. Prefixes work too: `? why`, `! crash`, `* what if`, `~ typo`,
+  `+ nice`.
 
   | kind | means | the agent is told |
   |---|---|---|
@@ -271,15 +314,17 @@ did that, remove those entries once the plugin is installed, or every hook runs 
   | 💭 question | explain before changing | answer first |
   | ✨ praise | this is good | no action |
 
-- **Screenshots**: click 📎 on a card to pick an image, press ⌘V with a card focused to
+- **Screenshots**: click **Attach** on a card to pick an image, press ⌘V with a card focused to
   paste one, or **hold ⇧ while dragging** an image file onto a card. The ⇧ is not optional:
   VS Code blocks pointer events over every webview during a drag and lifts the block only
   while Shift is held, so a plain drag never reaches the panel. Images are stored outside
   your repo and passed to the agent as a file path it reads.
-- **Suggested change**: attach the code you want. **Apply Suggested Change Locally** (in `⋯`)
-  applies it with a normal undoable edit — no round-trip for mechanical fixes.
 - **Anchors are content-based**: notes follow their code when the agent rewrites a file. If
-  the code truly disappears the note is kept, flagged ⚠ stale, and can be re-anchored.
+  the code truly disappears the note is kept, flagged ⚠ stale, and its `⋯` offers
+  **Re-anchor at the cursor**.
+- **The `⋯` on a card** holds what does not earn a place in its row of buttons: attach a
+  screenshot, copy the note, mark it done without asking again, delete it — plus re-anchor,
+  when a note has lost its lines.
 - Notes survive reloads, live in VS Code's per-workspace storage, and never enter your repo.
 
 ## Commands
@@ -287,16 +332,23 @@ did that, remove those entries once the plugin is installed, or every hook runs 
 | Command | Key | Where |
 |---|---|---|
 | Add note | `⌘⏎` in the widget | `+` in the gutter |
-| Add Note at Cursor | `⌘⌥M` / `Ctrl+Alt+M` | palette, editor menu |
+| Add Note Here | `⌘R` / `Ctrl+R` | editor menu — opens the widget on the line |
+| Add Note at Cursor | `⌘⌥M` / `Ctrl+Alt+M` | palette — types into a prompt instead |
 | Send Notes to Claude Code | `⌘⌥S` / `Ctrl+Alt+S` | panel toolbar |
-| Review Latest Changes · Review All Changes | — | strip **Last** / **All** |
+| Review Latest Changes · Review All Changes | — | session card **Last run** / **Everything** |
 | Go to Next / Previous Change | `⌥F7` / `⇧⌥F7` | palette |
 | Apply Claude's Report · Clear Sent Notes | — | panel |
 | Preview Notes · Refresh · Clear All Notes | — | panel toolbar |
 | Pin Baseline Here · Clear Pinned Baseline | — | panel `…` menu |
-| Choose Claude Code Session… | — | panel `…` menu, strip `⇄` |
+| Choose Claude Code Session… | — | panel `…` menu, session card `⇄` |
 | Restore Last Submitted Batch | — | panel `…` menu |
-| Set Kind… · Add Follow-up… · Add Suggested Change… · Delete Note | — | widget title, card `⋯` |
+| Do Not Send the Queued Notes | — | session card, beside *N queued* |
+| Review a Previous Run | — | palette |
+| Set Up Claude Code Plugin | — | palette |
+| Show Notes | — | palette |
+| Set Kind… | — | widget title, card kind icon |
+| Delete Note · Copy Note · Mark Done | — | card `⋯` |
+| Re-anchor at Cursor | — | card `⋯`, when a note has lost its lines |
 | Show Log | — | palette |
 
 ## Sending to a session
@@ -317,7 +369,7 @@ finishes while VS Code is open pings you with the diff.
 | `redline.includeSnippet` | `true` | Include the referenced source lines |
 | `redline.includeGitContext` | `true` | Repo, branch and HEAD in the prompt |
 | `redline.scopeGuard` | `true` | Tell the agent to touch only these files |
-| `redline.requestReport` | `true` | Ask for `#12 done` lines so the panel can update itself |
+| `redline.requestReport` | `true` | Ask for outcomes back — a JSON file with the plugin, `#12 done` lines without it |
 | `redline.confirmOnSubmit` | `true` | Confirm before sending |
 | `redline.defaultKind` | `comment` | Kind given to new notes |
 | `redline.kindPrefixes` | `true` | `? ` `! ` `* ` `~ ` `+ ` set the kind |
@@ -337,16 +389,15 @@ you don't touch them.
 
 ## Appearance
 
-The comment widget is VS Code's own, themed by `editorCommentsWidget.*`. Redline sets one
-default: the reply bar's background is transparent, so it takes the widget's colour instead of
-sitting on it as a slab. Transparency rather than a colour, because a literal one would be
-wrong on half the themes people use.
+The comment widget is VS Code's own, themed by `editorCommentsWidget.*`, and Redline overrides
+none of it — your theme decides. The box you type a note into has a 90-pixel floor set by the
+editor itself, so it cannot be made shorter from here.
 
-Override it, or tune the rest, in your settings:
+Tune it in your settings if you want to:
 
 ```json
 "workbench.colorCustomizations": {
-  "editorCommentsWidget.replyInputBackground": "#00000000",
+  "editorCommentsWidget.replyInputBackground": "#1e1e1e",
   "editorCommentsWidget.unresolvedBorder": "#d97757",
   "editorCommentsWidget.resolvedBorder": "#00000040",
   "editorCommentsWidget.rangeBackground": "#d9775714"
@@ -361,10 +412,16 @@ nothing leaves the machine until you paste it yourself.
 What is written, and where:
 
 - **Notes** in VS Code's own workspace storage, never in your repository.
-- **Screenshots** you attach, in the extension's storage directory — also outside the repository.
+- **Screenshots** you attach, in the extension's storage directory — also outside the
+  repository, and deleted with the note once it is gone for good, follow-ups' included. A note
+  that is only *sent* keeps them: it is still in the archive, and restoring that batch brings
+  it back whole.
 - **The plugin's state** in `~/.claude/redline/<folder>/`: which files each run touched, the
-  snapshots that bound a run, and a batch of feedback while it waits to be collected. Delete
-  the directory at any time; it is rebuilt on the next run.
+  snapshots that bound a run, and a batch of feedback while it waits to be collected. The most
+  recent round is also kept there once it has been used — the batch you sent (`outbox.sent.md`)
+  and Claude's answers about it (`report.json.applied`) — so a round that went wrong can still
+  be read. One of each: the next round overwrites them. Delete the directory at any time; it is
+  rebuilt on the next run.
 - **Snapshot objects** in your repository's own object store, unreachable, exactly as
   `git stash create` leaves its own. Redline creates no refs, branches or commits, and never
   writes to your index or working tree. Git prunes them on its usual schedule.
@@ -388,3 +445,8 @@ npm run package            # → redline-<version>.vsix
 The panel is a webview whose script and stylesheet are real files in `media/` — they are
 syntax-checked by `npm test`, and unit tests drive `media/cards.js` directly against a DOM
 shim, which is what keeps the drag, paste and render paths from silently breaking.
+
+**[`docs/`](docs/) is written for whoever changes this next** — what the parts are, what a note
+is, how the panel and the plugin work, which test suite to reach for, where a new file goes,
+and a page of decisions that look wrong until you know why. Start with
+[`docs/architecture.md`](docs/architecture.md).

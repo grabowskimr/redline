@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
-import { Attachments } from '../attachments';
+import { Attachments } from '../store/attachments';
 import { Logger } from '../logger';
 import {
   firstLine,
@@ -14,7 +14,7 @@ import {
   ReviewNote,
 } from '../model/note';
 import { readStopMarker } from '../claude/runTrees';
-import { parseDroppedPaths } from '../dnd/dropPayload';
+import { parseDroppedPaths } from './dropPayload';
 import { ReviewStore } from '../store/reviewStore';
 import { NoteIndex } from './noteIndex';
 import { uriForNote } from '../comments/uriMapping';
@@ -30,6 +30,33 @@ export const CARDS_VIEW_ID = 'redline.cards';
  * watcher covers your own edits, so this exists purely for the case where neither fires.
  */
 const SESSION_REFRESH_MS = 30_000;
+
+/**
+ * Every command a card or the session header is allowed to ask for.
+ *
+ * The panel is a webview: its script is a file on disk that anything on this machine can
+ * rewrite, and note text it renders comes from files under review. `executeCommand` with
+ * whatever name arrived turned either of those into full command dispatch in the extension
+ * host. Listed explicitly, so adding a button is a deliberate act — a name not here is
+ * dropped with a line in the log, and `media/cards.js` must gain its entry alongside.
+ */
+const PANEL_COMMANDS: ReadonlySet<string> = new Set([
+  'redline.applyReport',
+  'redline.approveNote',
+  'redline.cancelQueued',
+  'redline.copyNote',
+  'redline.deleteNote',
+  'redline.needsWork',
+  'redline.pickSession',
+  'redline.reanchorNote',
+  'redline.revealNote',
+  'redline.reviewAllChanges',
+  'redline.reviewChanges',
+  'redline.sendSelected',
+  'redline.setUpHook',
+  'redline.showLog',
+  'redline.toggleDone',
+]);
 
 /** Plain data handed to the webview (no vscode types cross the boundary). */
 interface CardData {
@@ -48,7 +75,6 @@ interface CardData {
   rejected?: boolean;
   body: string;
   addenda: string[];
-  suggestion?: string;
   snippet: string;
   language: string;
   where: string;
@@ -56,9 +82,11 @@ interface CardData {
   orphaned: boolean;
   /** The file the note points at is no longer on disk. */
   missing?: boolean;
-  attachments: Array<{ src: string; path: string; name: string; caption: string; followUp: boolean }>;
-  sent?: { outcome?: string; reply?: string; changed: boolean; seenTurns?: number };
-  /** A reply is written but not sent: the card stays active and offers ➤. */
+  attachments: Array<{ src: string; path: string; name: string; caption: string; turn: number }>;
+  sent?: { outcome?: string; reply?: string; changed: boolean; seenTurns?: number; route?: string };
+  /** Sent while the agent was working, so it is held until the run ends. */
+  queued?: boolean;
+  /** A reply is written but not sent: the card stays active and offers *Send your reply*. */
   pendingReply?: boolean;
   /** Sent, and Claude has not reported on it yet. */
   awaiting?: boolean;
@@ -222,6 +250,8 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   /** How many notes are waiting for Claude to be free, from whatever knows. */
   queuedCount: () => number = () => 0;
+  /** Notes waiting for the agent to go quiet, by id — the card says so rather than nothing. */
+  queuedIds: () => readonly string[] = () => [];
 
   private async sessionInfo(): Promise<SessionInfo> {
     let label = this.watcher?.label ?? '';
@@ -277,6 +307,10 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async refreshMissing(): Promise<void> {
+    // Nothing to redraw while the panel is closed, and this is the one thing on the store-change
+    // path that costs an RPC per note file — sixty of them, several times a second during a
+    // typing burst, to update a badge nobody can see.
+    if (!this.view?.visible) return;
     // A note whose folder has left the workspace has no path to check; it is already
     // unreachable and saying "deleted" about it would be a guess.
     const paths = new Set(
@@ -331,11 +365,22 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       // Every card names its own file: they come from all over, and there is no group header
       // above them to say which.
       fileRef: `${n.path.split('/').pop() ?? n.path}:${n.range.startLine + 1}`,
-      firstLine: n.range.startLine + 1,
+      // Numbered from where the code was when it was captured, so the numbers agree with the
+      // lines above them. The file reference beside the card still says where it is now.
+      firstLine: (n.snapshot?.startLine ?? n.range.startLine) + 1,
       ...(n.rejected ? { rejected: true } : {}),
       body: n.body,
       addenda: n.addenda,
-      snippet: n.anchor.snippet,
+      /*
+       * What you highlighted, as you saw it.
+       *
+       * `anchor.snippet` looks like the same thing and is not: it is the key the note is found
+       * by, and it follows the code as the agent rewrites it, or the note orphans on the first
+       * edit. Showing that on the card put today's lines under yesterday's comment, which
+       * quietly rewrites the question you asked. Notes written before this was recorded fall
+       * back to it, which is the best that can be said for them.
+       */
+      snippet: n.snapshot?.code ?? n.anchor.snippet,
       language: n.languageId ?? '',
       where: formatLineRange(n.range),
       done: n.done,
@@ -345,19 +390,25 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         src: this.view ? this.view.webview.asWebviewUri(vscode.Uri.file(p)).toString() : '',
         path: p,
         name: path.basename(p),
-        // What it is attached to, which is not recoverable from the path. The card puts the
-        // two in different places: a picture attached to a follow-up is evidence for the
-        // follow-up, not for the note.
-        followUp: ((n.attachmentTurns ?? [])[i] ?? 0) > 0,
+        // Which turn it belongs to, which is not recoverable from the path. A capture taken
+        // while writing the second follow-up is evidence for that follow-up, and showing it
+        // under the newest one instead points at the wrong words — so the index travels with
+        // it and the card puts it back beside the turn it was taken for.
+        turn: (n.attachmentTurns ?? [])[i] ?? 0,
         caption: ((n.attachmentTurns ?? [])[i] ?? 0) > 0 ? 'attached to this follow-up' : 'attached screenshot',
       })),
     };
-    if (n.suggestion !== undefined) c.suggestion = n.suggestion;
+    // Waiting on the agent to go quiet. Said before anything else about the note: it explains
+    // why pressing send appeared to do nothing, which is the question the card has to answer.
+    if (this.queuedIds().includes(n.id)) c.queued = true;
     if (hasUnsentReply(n)) c.pendingReply = true;
     else if (n.sent && !n.sent.outcome) c.awaiting = true;
     if (n.sent) {
       const changed = this.index.changedSinceSent(n.id);
       c.sent = { changed };
+      // How it left, when it did not go into a session: nobody has read it yet, and the card
+      // must not say it is waiting on Claude.
+      if (n.sent.route) c.sent.route = n.sent.route;
       // Turns written after this are yours and Claude has not seen them — the card marks
       // them, and they are what the send button on it would send.
       if (typeof n.sent.addendaAtSend === 'number') c.sent.seenTurns = n.sent.addendaAtSend;
@@ -392,16 +443,56 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         void this.postSession();
         break;
       case 'command':
-        if (m.command) await vscode.commands.executeCommand(m.command, m.id);
+        // The message names a command; it does not authorise one. Dispatching whatever the
+        // panel asked for put every VS Code command in the editor host one injection in
+        // `cards.js` away — `workbench.action.terminal.sendSequence` among them — with the
+        // nonce CSP as the only thing in between. Same rule as `openAttachment` and
+        // `removeAttachment` below: the message is data.
+        if (m.command && PANEL_COMMANDS.has(m.command)) {
+          await vscode.commands.executeCommand(m.command, m.id);
+        } else if (m.command) {
+          this.logger.warn(`panel asked for a command it may not run: ${m.command}`);
+        }
         break;
       case 'setKind':
         if (m.id && m.kind) this.store.update(m.id, { kind: m.kind as NoteKind });
         break;
+      case 'dropTurn': {
+        // Taking back a follow-up that has not gone. Only those are offered, and the index is
+        // checked against what was sent rather than trusted: the webview sends data.
+        const note = m.id ? this.store.getById(m.id) : undefined;
+        const at = Number(m.text);
+        if (!note || !Number.isInteger(at) || at < 0 || at >= note.addenda.length) break;
+        const seen = note.sent?.addendaAtSend ?? note.addenda.length;
+        if (at < seen) break; // Claude has seen it; it is part of the record now
+        /*
+         * A screenshot names the turn it belongs to as `index + 1`.
+         *
+         * Ones taken for a later turn slide back with it. The ones taken for *this* turn have
+         * lost the words they were evidence for — they go back to the box, where they can be
+         * used for whatever is written next or taken off. Leaving them on `at + 1` handed them
+         * to whichever follow-up slid into that slot, which is the wrong words entirely, and
+         * dropping them would delete a file the user attached on purpose.
+         */
+        const turns = note.attachmentTurns;
+        const pending = note.addenda.length; // (length - 1) + 1, after the removal
+        this.store.update(note.id, {
+          addenda: note.addenda.filter((_, i) => i !== at),
+          ...(turns
+            ? {
+                attachmentTurns: turns.map((t) =>
+                  t === at + 1 ? pending : t > at + 1 ? t - 1 : t,
+                ),
+              }
+            : {}),
+        });
+        break;
+      }
       case 'addAddendum': {
         const n = m.id ? this.store.getById(m.id) : undefined;
         if (!n || !m.text?.trim()) break;
         // Recorded, not sent. A reply often wants a screenshot attached before it goes, so
-        // the send is always an explicit act — the card shows ➤ once there is something to
+        // the send is always an explicit act — the card offers to send once there is something to
         // send.
         this.store.update(n.id, { addenda: [...n.addenda, m.text.trim()] });
         break;
@@ -519,7 +610,10 @@ export class CardsViewProvider implements vscode.WebviewViewProvider, vscode.Dis
    */
   private sessionState(): SessionInfo['state'] {
     if (this.signals?.running) return 'working';
-    return this.watcher?.state ?? 'off';
+    if (this.watcher?.state && this.watcher.state !== 'off') return this.watcher.state;
+    // The idle monitor only attaches to Orca terminals, so everyone else read "not watched"
+    // between runs — including people whose plugin was reporting every tool call.
+    return this.signals?.reporting ? 'idle' : 'off';
   }
 
   private async resolveAttachTarget(id: string | undefined): Promise<string | undefined> {

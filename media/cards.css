@@ -1,8 +1,112 @@
+/*
+ * Everything the panel is painted with, in one place, and every one of them from the editor's
+ * own theme.
+ *
+ * It used to be a hand-picked dark palette — two dozen hex values scattered through the file —
+ * which looked right in one theme and wrong in every other, and unreadable in a light one: a
+ * near-black card on a white panel. The fallbacks are the old values, so a theme that does not
+ * define one of these still gets a considered colour rather than a browser default.
+ *
+ * `color-mix` does the shading. A border that is "the surface, a little lighter" holds in a
+ * light theme as well as a dark one, where `#34363b` only ever held in the one it was picked
+ * for.
+ */
 :root {
   /* Code, file references, status words and section labels. */
   --redline-mono: 'JetBrains Mono', var(--vscode-editor-font-family), ui-monospace, monospace;
-  --accent: #d97757;
+  /* One line of code in a snippet: `font-size: 12px` at `line-height: 1.5`. Not `--rl-*`,
+     which is reserved for colours the theme decides. */
+  --redline-snip-line: 18px;
+
+  /* ── surfaces ─────────────────────────────────────────────────────── */
+  /* The panel behind everything: the surface a view is drawn on. */
+  --rl-bg: var(--vscode-sideBar-background, #1e1f22);
+  /*
+   * A card standing on it: the editor's surface, lifted.
+   *
+   * Not `editorWidget-background` — plenty of themes make that identical to the sidebar, and
+   * the cards flattened into the panel. Derived from the editor instead, and moved a little
+   * toward the text, which is "raised" in a dark theme and "set apart" in a light one. The
+   * lift is what keeps it off the code inside it, which is the editor's colour exactly.
+   */
+  /*
+   * Barely lifted off the editor's own ground.
+   *
+   * It was mixed 11% toward the foreground, which in a dark theme means 11% toward white — a
+   * pale slab under dark code. A few per cent is enough to tell a card from the panel it sits
+   * on, and leaves the snippet inside it, which is the editor's colour exactly, still reading
+   * as sunken rather than as the same shade.
+   *
+   * How far it can be trusted to lift, though, is the theme's decision: plenty of themes give
+   * the sidebar and the editor the same colour, and there the fill alone puts a card on a
+   * ground of its own shade and the column reads as one flat sheet. So the lift stays subtle
+   * and `--rl-card-edge` draws the card instead — an edge is legible at any theme's mercy.
+   */
+  --rl-card: color-mix(in srgb, var(--vscode-editor-background, #212226) 94%, var(--vscode-foreground));
+  /* Sunk into a card: code, an input, a status row. */
+  /*
+   * The editor's own background, so a snippet on a card is the colour that code is when you
+   * are reading it in a file. The card is lifted off it rather than the other way round, which
+   * is what keeps the two apart in a light theme as well as a dark one.
+   */
+  --rl-sunken: var(--vscode-editor-background, #17181a);
+  /* A card nobody has to act on any more: sunk back toward the panel it stands on. */
+  --rl-settled: color-mix(in srgb, var(--rl-card) 55%, var(--rl-bg));
+
+  /* ── lines ────────────────────────────────────────────────────────── */
   --hair: var(--vscode-widget-border, var(--vscode-panel-border));
+  --rl-edge: var(--vscode-editorWidget-border, var(--hair, color-mix(in srgb, var(--rl-card) 82%, var(--vscode-foreground))));
+  --rl-edge-soft: color-mix(in srgb, var(--rl-card) 88%, var(--vscode-foreground));
+  --rl-edge-strong: color-mix(in srgb, var(--rl-card) 70%, var(--vscode-foreground));
+  /*
+   * The line around a card, taken from the card rather than from the panel: a step further
+   * toward the text than the fill it encloses, which is lighter in a dark theme and darker in
+   * a light one — lifted either way, and never the invisible hairline a themed border token
+   * turns into when a theme leaves it unset.
+   */
+  --rl-card-edge: color-mix(in srgb, var(--rl-card) 87%, var(--vscode-foreground));
+  /* Around a card nobody has to act on: enough to keep its shape, not enough to ask for a look. */
+  --rl-card-edge-settled: color-mix(in srgb, var(--rl-settled) 93%, var(--vscode-foreground));
+
+  /* ── text ─────────────────────────────────────────────────────────── */
+  --rl-text: var(--vscode-foreground);
+  /* What you wrote, and what Claude wrote: the things actually worth reading. */
+  --rl-said: var(--vscode-editor-foreground, var(--vscode-foreground));
+  --rl-muted: var(--vscode-descriptionForeground, #8d8a86);
+  --rl-faint: var(--vscode-disabledForeground, #6b6a67);
+
+  /* ── meaning ──────────────────────────────────────────────────────── */
+  /* Redline's own. Deliberately not from the theme: it is the one colour that is the product's
+     rather than the editor's, and it has to stay recognisable across all of them. */
+  --accent: #d97757;
+  --rl-accent-text: var(--vscode-charts-orange, var(--accent));
+  /*
+   * Ink on a filled amber button, and deliberately not the editor's background.
+   *
+   * That background follows the theme; the button does not. `charts.orange` is the same
+   * mid-tone amber in a light theme as in a dark one, so background-as-ink meant white on
+   * amber the moment someone switched to Light+ — 2.8:1, the weakest text on the card. The
+   * amber itself taken almost to black is dark in either theme: 6.3:1 both ways.
+   */
+  --rl-on-accent: color-mix(in srgb, var(--rl-accent-text) 12%, #07080a);
+  /*
+   * Nudged away from the ground it is painted on, which is what makes the ink on it legible.
+   * `charts.green` is light in a dark theme (#89D185) and dark in a light one (#388A34);
+   * mixing a tenth of the editor's foreground into it moves it further from the editor's
+   * background either way. Left alone, the light theme's green topped out at 4.3:1 under any
+   * ink at all — there was no colour that passed on it.
+   */
+  --rl-good: color-mix(in srgb, var(--vscode-charts-green, var(--vscode-testing-iconPassed, #7fbf87)) 90%, var(--vscode-editor-foreground));
+  /*
+   * Ink on that green. It was `button-foreground`, which is `#ffffff` in *both* default
+   * themes — so in a dark one it was white on a pale green, about 1.8:1, and unreadable. The
+   * editor's background is the one token guaranteed to sit opposite its foreground, so it is
+   * dark where the green is light and light where the green is dark: 9.9:1 and 5.2:1. The
+   * near-black fallback is what a theme with no editor background gets.
+   */
+  --rl-on-good: var(--vscode-editor-background, #0f1a12);
+  --rl-bad: var(--vscode-charts-red, var(--vscode-editorError-foreground, #e08d8d));
+  --rl-warn: var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground, #d9b169));
 }
 
 * {
@@ -16,7 +120,7 @@
  * scrollbar on a panel holding a single card. Letting the content decide the height means the
  * only scrollbar is the one that is actually needed. */
 body {
-  background: #1e1f22;
+  background: var(--rl-bg);
   margin: 0;
   padding: 0 10px 18px;
   /* Long unbreakable text belongs to the block that holds it, never to the panel. */
@@ -33,18 +137,80 @@ body {
 }
 
 /* ── session strip ───────────────────────────────────────────────────── */
-
+/*
+ * Two rows, because they answer two questions. The first is who Claude is and whether it is
+ * listening; the second is what there is to review and at which scope. Squeezed onto one line
+ * the session name and the two scope buttons fought for the same space, and the name — the
+ * part that tells you which worktree you are looking at — was what gave way.
+ */
+/*
+ * A toolbar, not a card.
+ *
+ * It used to be a rounded, bordered box sitting above a column of rounded, bordered boxes — so
+ * the one thing that is not a note looked exactly like a note, and the eye had to read it to
+ * find that out. As a band across the top, edge to edge and separated by a rule, it reads as
+ * chrome at a glance and the cards below start where the notes start.
+ */
 .session {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  /* Whatever is in it gives way rather than pushing past the edge. */
+  overflow: hidden;
+  min-width: 0;
+  /*
+   * Out to the panel's edges: chrome spans, content is inset. The pull is horizontal only,
+   * and exactly the inset `body` has.
+   *
+   * It used to pull upwards as well, against a top padding the body no longer has: the strip
+   * was dragged above the document origin, where there is nothing to scroll it back down, and
+   * eight of its nine pixels of `padding-top` were cut off. The dot, the name and the state
+   * sat flush on the panel's top edge and the working tint above them never drew at all. The
+   * sides were pulled 12px against a 10px inset and bled two pixels past the edge with it.
+   */
+  margin: 0 -10px 8px;
+  /* The inset it gives back, so the name lines up with the cards' left edge rather than
+     sitting two pixels in from them. */
+  padding: 9px 10px 8px;
+  border-bottom: 1px solid var(--rl-edge);
+  background: color-mix(in srgb, var(--rl-bg) 82%, var(--vscode-editor-background));
+  font-size: 0.9em;
+  /* The state colours the bar, so nothing inside it has to resize to say so. */
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.session.working {
+  border-bottom-color: color-mix(in srgb, var(--accent) 55%, var(--rl-edge));
+  background: color-mix(in srgb, var(--accent) 7%, var(--rl-bg));
+}
+/*
+ * Waiting on a command. The card takes the same colour it wears while Claude is working —
+ * a spinner swapped in for a button label changes that button's width, which changes the
+ * row's height, which moves every card underneath at the moment you are reading one.
+ */
+.session.busy {
+  border-bottom-color: color-mix(in srgb, var(--accent) 55%, var(--rl-edge));
+  background: color-mix(in srgb, var(--accent) 7%, var(--rl-bg));
+}
+
+/*
+ * Fixed heights, both rows. The card is the one thing on screen that is always there, and it
+ * sat above everything else — so anything that changed its height moved the whole panel under
+ * the pointer. Nothing in either row is allowed to decide how tall it is.
+ */
+.session .who-row,
+.session .scope-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-  padding: 7px 10px;
-  margin: 10px 0 4px;
-  border: 1px solid var(--hair);
-  border-radius: 8px;
-  background: var(--vscode-editorWidget-background);
-  font-size: 0.9em;
+  flex: 0 0 auto;
+}
+.session .who-row {
+  height: 22px;
+  min-width: 0;
+}
+.session .scope-row {
+  height: 26px;
+  min-width: 0;
 }
 /* The text shrinks and ellipsizes; the buttons never do. Flex children default to
    min-width:auto, which is why an unconstrained label pushes controls out of view. */
@@ -66,7 +232,8 @@ body {
 .session.idle .dot {
   background: var(--vscode-charts-green);
 }
-.session.working .dot {
+.session.working .dot,
+.session.busy .dot {
   background: var(--accent);
   animation: pulse 1.2s ease-in-out infinite;
 }
@@ -75,19 +242,26 @@ body {
     opacity: 0.3;
   }
 }
-.session .who,
-.session .meta {
+/*
+ * The name gives way; the status never does.
+ *
+ * Both used to shrink, and flexbox takes from each in proportion — so a long worktree name
+ * pushed until *"watching"* was cut to *"watc"*. The name is the expendable half: you know
+ * which session you picked, and half of it still identifies it. The status is eight characters
+ * that say whether anything is listening at all.
+ */
+.session .who {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
-}
-.session .who {
-  flex: 0 1 auto;
+  font-weight: 500;
 }
 .session .meta {
   opacity: 0.6;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .session .controls {
   display: flex;
@@ -96,8 +270,110 @@ body {
   flex: 0 0 auto;
   margin-left: auto;
 }
-.session button,
-.sentbar button {
+/*
+ * An icon, not a button-shaped thing.
+ *
+ * These are `<span role="button">` rather than `<button>` on purpose: the host paints its own
+ * chrome on real buttons — a filled, padded box on press and while a command runs — and it
+ * kept coming back through a state no rule of ours had covered. The card already says a
+ * command is running by taking the working colour; the icon only has to say which one.
+ */
+.session .controls .swap {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: var(--rl-muted);
+  cursor: pointer;
+  user-select: none;
+  box-sizing: border-box;
+  transition: color 90ms ease;
+}
+.session .controls .swap:hover {
+  color: var(--vscode-foreground);
+}
+.session .controls .swap.busy,
+.session .controls .swap:active {
+  color: var(--accent);
+}
+.session .controls .swap:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The log control carries a word rather than an icon, so it keeps a button's shape. */
+.session .controls .wordy {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 9px;
+  border-radius: 5px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+}
+
+/* ── what there is to review, and at what scope ──────────────────────── */
+/* One line, always present: "nothing changed yet" holds the same room as a real count. */
+/*
+ * One line, always present, and the first thing to give way.
+ *
+ * It carried the whole sentence — "1 file changed in the last run (since 11:10) · +2 older" —
+ * which does not fit beside two buttons in a panel docked narrow, so it clipped mid-word and
+ * shoved them off the edge. The count is what is worth reading at a glance; the sentence is in
+ * the tooltip, where it costs nothing.
+ */
+.session .what {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--rl-text);
+  cursor: default;
+}
+.older {
+  color: var(--rl-faint);
+}
+/*
+ * One control in two halves, not two buttons that happen to sit together: they are the same
+ * question — how far back to look — asked at two scopes. It holds its ground at the right of
+ * the row; the words beside it are what shrinks.
+ */
+.session .scope {
+  display: flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.session .scope button {
+  border-radius: 0;
+  background: transparent;
+  padding: 4px 11px;
+}
+.session .scope button + button {
+  border-left: 1px solid var(--hair);
+}
+.session .scope button:hover:not(.off) {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+/* Present but not offered: the row keeps its shape whether or not there is anything behind it. */
+.session .scope button.off {
+  color: var(--vscode-disabledForeground, var(--rl-faint));
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* The plain buttons in the session card — the scope pair, and the Log control. */
+.session button {
   background: var(--vscode-button-secondaryBackground);
   color: var(--vscode-button-secondaryForeground);
   border: 0;
@@ -107,8 +383,7 @@ body {
   white-space: nowrap;
   flex: 0 0 auto;
 }
-.session button:hover,
-.sentbar button:hover {
+.session button:hover {
   background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
 }
 
@@ -120,34 +395,44 @@ body {
 .list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   padding: 8px 0 4px;
 }
 
+/*
+ * One hairline, and nothing else on it.
+ *
+ * What went was the *kind-coloured* rule down the left: ten cards each flagged in their own
+ * colour, and the panel read as a form. Dropping every line with it went too far — a card is
+ * then only as visible as the theme's gap between the sidebar and the editor, and in the
+ * themes that give both the same colour there is no gap at all: cards, and the ground they
+ * stand on, one shade. The edge is a step lighter than the card's own fill rather than a
+ * darker rule around it, so it reads as the lit top of something raised.
+ */
 .card {
-  background: #212226;
-  border: 1px solid #34363b;
-  border-radius: 10px;
-  padding: 13px 14px;
+  background: var(--rl-card);
+  border: 1px solid var(--rl-card-edge);
+  border-radius: 9px;
+  padding: 9px 11px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 7px;
 }
+/* Focus brightens the edge the card already has, rather than drawing a second one around it. */
 .card:focus-within {
-  border-color: #4a4d54;
-  outline: none;
+  border-color: var(--rl-edge-strong);
 }
-/* The state colours the edge, so the queue reads down the left of the panel. */
-.card.approve {
-  border-color: rgba(224, 137, 74, 0.45);
-}
-.card.rejected {
-  border-color: rgba(224, 141, 141, 0.4);
-}
+/*
+ * State is a word, not a colour on an edge.
+ *
+ * `NEEDS APPROVAL` in amber at the top of the card already says it, and said it while the
+ * border was saying it too. A settled card still changes ground, because that is the one state
+ * you read by weight rather than by reading.
+ */
 .card.done {
-  background: #1c1d20;
-  border-color: #2b2c30;
-  gap: 8px;
+  background: var(--rl-settled);
+  border-color: var(--rl-card-edge-settled);
+  gap: 6px;
 }
 
 /* ── the row that says what and where ─────────────────────────────────── */
@@ -163,71 +448,172 @@ body {
   flex-wrap: wrap;
 }
 .state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--redline-mono);
   font-size: 10.5px;
   font-weight: 500;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #c9c6c1;
+  color: var(--rl-text);
   flex: 0 0 auto;
 }
 .state.approve {
-  color: #e0894a;
+  color: var(--rl-accent-text);
 }
 .state.rejected {
-  color: #e08d8d;
+  color: var(--rl-bad);
 }
 .state.done {
-  color: #7fbf87;
+  color: var(--rl-good);
 }
 .state.waiting {
-  color: #8d8a86;
+  color: var(--rl-muted);
 }
+/*
+ * A note nobody has sent yet takes the card's own colour: nothing has happened to it, and a
+ * state word in a colour of its own would be saying something. Written out rather than left to
+ * fall through, so it is clear this is a decision — and so the guard can see it is one.
+ */
+.state.drafting {
+  color: var(--rl-text);
+}
+/* Written and still in your hands: the one state where the panel is waiting on you. */
+.state.unsent {
+  color: var(--rl-warn);
+}
+/*
+ * It wraps rather than running off the card, because it is the one thing that must never be
+ * clipped and the card has no `overflow` to catch it.
+ *
+ * Held on one unbreakable line it was wider than the panel on any real path, and what went
+ * over the edge first was the kebab at its end — clipped away by `body { overflow-x: hidden }`
+ * with no scrollbar and no hint, so the overflow menu (delete, copy, re-anchor) was
+ * unreachable on exactly the long filenames. Breaking the path mid-word is ugly; losing the
+ * end of it, or the only way to act on the note, is worse.
+ */
 .meta .ref {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 5px;
   font-family: var(--redline-mono);
   font-size: 11px;
-  color: #8d8a86;
-  white-space: nowrap;
-  flex: 0 0 auto;
+  color: var(--rl-muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex: 0 1 auto;
+  min-width: 0;
 }
-/* Icon only: ten kinds are told apart by colour long before anyone reads a word. */
+/*
+ * Icon only: ten kinds are told apart by colour long before anyone reads a word.
+ *
+ * It is a `<button>` so it can be reached from the keyboard, which means it arrives with the
+ * host's own button chrome — a filled square sitting behind the icon. All of it is reset here.
+ */
 .meta .kind {
   cursor: pointer;
   display: inline-flex;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  outline: none;
+  align-items: center;
+  /*
+   * No `color` here. This resets the host's button chrome, and a `color: inherit` in it
+   * out-specified `.k-<kind>` — two classes to one — so the icon that carries the kind was
+   * quietly given back the colour of the text around it.
+   */
+}
+.meta .kind:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 .meta .kind .codicon {
   font-size: 13px;
 }
 
+
 /* ── the lines the note was written about ─────────────────────────────── */
 .snip {
   margin: 0;
-  background: #17181a;
-  border: 1px solid #2b2c30;
-  border-radius: 7px;
-  padding: 9px 11px;
+  background: var(--rl-sunken);
+  border: 1px solid var(--rl-edge-soft);
+  border-radius: 6px;
+  padding: 7px 10px;
   font-family: var(--redline-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  color: #c9c6c1;
+  font-size: 11.5px;
+  line-height: 1.45;
+  /* The colour code is in a file, on the background code has in a file. */
+  color: var(--vscode-editor-foreground, var(--rl-text));
   overflow-x: auto;
   white-space: pre;
   cursor: pointer;
 }
+/*
+ * A long snippet, folded.
+ *
+ * A note on a whole function is ordinary, and thirty lines of it at the top of a card push
+ * everything that needs answering off the screen. Three lines and a bit show through; the fade
+ * is what says there is more, and the button under it is the whole fade, so there is no small
+ * target to hit.
+ */
+.snipwrap {
+  position: relative;
+}
+.snipwrap.clipped .snip {
+  /* Three lines, plus enough of the fourth to be visibly cut off. */
+  max-height: calc(var(--redline-snip-line) * 3.6 + 9px);
+  overflow-y: hidden;
+}
+.snipwrap .unclip {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 2px 0 0;
+  background: none;
+  border: 0;
+  font-family: var(--redline-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rl-faint);
+  cursor: pointer;
+  text-align: left;
+}
+.snipwrap .unclip:hover {
+  color: var(--rl-text);
+}
+/* While it is folded the button *is* the fade: the whole bottom of the block is the target. */
+.snipwrap.clipped .unclip {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  margin: 0;
+  padding: 22px 11px 7px;
+  border-radius: 0 0 6px 6px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--rl-sunken) 0%, transparent),
+    var(--rl-sunken) 70%
+  );
+}
+
 .snip .ln {
-  color: #6b6a67;
+  color: var(--rl-faint);
   margin-right: 12px;
   user-select: none;
 }
 
 /* ── what you asked for ───────────────────────────────────────────────── */
 .say {
-  font-size: 14.5px;
-  line-height: 1.5;
-  color: #e6e4e1;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--rl-said);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   cursor: pointer;
@@ -239,51 +625,84 @@ body {
  * without a heading, a box or a colour block, at a width where all three would crowd.
  */
 .block {
-  border-top: 1px dashed #34363b;
-  padding-top: 10px;
+  border-top: 1px dashed var(--rl-edge);
+  padding-top: 7px;
 }
+/* The name on the left, the way to take it back on the right — a corner, not a word in a row. */
 .block-label {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-family: var(--redline-mono);
   font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  margin-bottom: 5px;
+  margin-bottom: 3px;
 }
 .block.claude .block-label {
-  color: #e0894a;
+  color: var(--rl-accent-text);
 }
 .block.reject .block-label {
-  color: #e08d8d;
+  color: var(--rl-bad);
 }
-.block.follow .block-label {
-  color: #c9c6c1;
+/* Your words, whether the first ones or a follow-up. */
+.block.follow .block-label,
+.block.mine .block-label {
+  color: var(--rl-text);
+}
+/*
+ * The note itself has no rule above it: it is the first thing said, so there is nothing for a
+ * separator to separate it from.
+ */
+.block.mine {
+  border-top: none;
+  padding-top: 0;
 }
 /* Written, kept, and Claude has not seen it: the card says so rather than looking sent. */
 .block-label .unsent {
   margin-left: 8px;
   letter-spacing: 0.06em;
-  color: #d9b169;
+  color: var(--rl-warn);
   text-transform: none;
 }
 .block-body {
-  font-size: 14px;
-  line-height: 1.55;
-  color: #d6d3ce;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--rl-said);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/*
+ * A file reference inside an answer. It carries no `href` — the click is handled here, not by
+ * the host — and an anchor without one gets the text cursor, so the one clickable thing in a
+ * paragraph looked like prose.
+ *
+ * Answers only. What you wrote is printed with `esc()` and no markdown pass, so a `.say` never
+ * contains one of these and the rule that used to name it here was dead.
+ */
+.block-body .ref {
+  color: var(--accent);
+  cursor: pointer;
+  font-family: var(--redline-mono);
+  font-size: 12.5px;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.block-body .ref:hover {
+  border-bottom-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .block-body code {
   font-family: var(--redline-mono);
   font-size: 12.5px;
-  color: #e0894a;
+  color: var(--rl-accent-text);
   background: none;
   padding: 0;
 }
 /* An answer that has been turned down is still worth reading, but it is not the live thing. */
 .block.claude.dim .block-body {
-  color: #a3a09c;
+  color: var(--rl-muted);
 }
 
 /* ── asking for another attempt ───────────────────────────────────────── */
@@ -295,21 +714,23 @@ body {
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  background: #17181a;
-  border: 1px solid #3a3c41;
+  background: var(--rl-sunken);
+  border: 1px solid var(--rl-edge);
   border-radius: 8px;
   padding: 9px 28px 9px 11px;
-  color: #e6e4e1;
+  color: var(--rl-said);
   font-family: var(--vscode-font-family);
   font-size: 13px;
   line-height: 1.4;
+  /* Matches one grown row, so the first frame is not a line shorter than the second. */
+  min-height: 36px;
 }
 .ask textarea::placeholder {
-  color: #6b6a67;
+  color: var(--rl-faint);
 }
 .ask textarea:focus {
   outline: none;
-  border-color: #4a4d54;
+  border-color: var(--rl-edge-strong);
 }
 .ask .hint {
   position: absolute;
@@ -317,75 +738,156 @@ body {
   bottom: 7px;
   font-family: var(--redline-mono);
   font-size: 11px;
-  color: #56585d;
+  color: var(--rl-faint);
   pointer-events: none;
 }
 
 /* ── the answer, in one click ─────────────────────────────────────────── */
 /*
- * Never wraps. Three buttons at 420px is the tightest row on the card, and a verb that breaks
- * across two lines stops reading as a button.
+ * Wraps, because the panel is a sidebar and people dock it narrow.
+ *
+ * Approve · Not this · Reply is about 224px. Held on one line, below roughly a 280px panel
+ * *Reply* was pushed outside the card and clipped away by `body { overflow-x: hidden }` — no
+ * scrollbar, no hint, no third answer. A verb that breaks across two lines stops reading as a
+ * button, so the buttons stay whole and the row is what gives way.
  */
+/*
+ * `.actions` and `.working` take turns in the same slot — one goes the moment the other
+ * arrives. Sharing a height means the card does not resize, and the cards below it do not
+ * shuffle, at the exact moment you are reading the answer.
+ */
+.actions,
+.card .working {
+  min-height: 31px;
+  box-sizing: border-box;
+}
+/*
+ * The band the card ends on.
+ *
+ * What you can do is not another paragraph of what was said. Set on a sunken ground and ruled
+ * off, the card has a bottom — which matters most in a column of them, where every card
+ * otherwise runs into the next.
+ *
+ * The ground is the editor's own, the same one the snippet and the inputs stand on. It used to
+ * be the card mixed back 92% toward that background — a step of six per cent of six per cent,
+ * which on Dark+ is 40.4 against 39.6 out of 255, under a single level, and in a light theme
+ * the sign flips and the "sunken" band comes out fractionally lighter than the card. Only the
+ * rule was doing any work, and the comment described something that did not render.
+ */
+.card .foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Out to the card's edges, under its padding — which is where these numbers come from. */
+  margin: 1px -11px -9px;
+  padding: 9px 11px;
+  border-top: 1px solid var(--rl-edge-soft);
+  background: var(--rl-sunken);
+  border-radius: 0 0 8px 8px;
+}
+/*
+ * A foot with nothing in it is a stripe, not a band. There is no `.card.done .foot` beside it
+ * any more: a settled card returns before a foot is ever built, so that selector matched
+ * nothing.
+ */
+.card .foot:empty {
+  display: none;
+}
+
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .actions button {
   font-family: var(--vscode-font-family);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.2;
-  padding: 8px 13px;
-  border-radius: 7px;
+  padding: 5px 11px;
+  border-radius: 6px;
   border: 1px solid transparent;
   cursor: pointer;
   white-space: nowrap;
   flex: 0 0 auto;
 }
+/* The one button that is allowed to fill the row: it is the only thing on it. */
 .actions .wide {
   flex: 1 1 auto;
 }
 .actions .go {
-  background: #e0894a;
-  color: #17181a;
+  background: var(--rl-accent-text);
+  color: var(--rl-on-accent);
   font-weight: 500;
+  /* The one button that commits something reads as raised rather than painted. */
+  border-color: color-mix(in srgb, var(--rl-accent-text) 70%, var(--vscode-foreground));
 }
 .actions .approve {
-  background: #7fbf87;
-  color: #0f1a12;
+  background: var(--rl-good);
+  color: var(--rl-on-good);
   font-weight: 500;
-  flex: 1 1 auto;
 }
 .actions .reject {
   background: transparent;
-  border-color: rgba(224, 141, 141, 0.4);
-  color: #e08d8d;
+  border-color: color-mix(in srgb, var(--rl-bad) 40%, transparent);
+  color: var(--rl-bad);
 }
 .actions .plain {
   background: transparent;
-  border-color: #3a3c41;
-  color: #c9c6c1;
+  border-color: var(--rl-edge);
+  color: var(--rl-text);
 }
 .actions button:hover {
   filter: brightness(1.08);
 }
 
 /* ── waiting on Claude ────────────────────────────────────────────────── */
-.working {
+/* A card's own status row. Scoped to a card: it paints a box, and only a card wants one. */
+.card .working {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #17181a;
-  border: 1px solid #2b2c30;
+  background: var(--rl-sunken);
+  border: 1px solid var(--rl-edge-soft);
   border-radius: 7px;
   padding: 8px 11px;
   font-size: 12.5px;
-  color: #8d8a86;
+  color: var(--rl-muted);
+}
+/* The way back out of a rejection, kept quiet: it is the correction, not the action. */
+.working .undo {
+  margin-left: 6px;
+  background: transparent;
+  border: 1px solid var(--rl-edge);
+  border-radius: 6px;
+  color: var(--rl-text);
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.working .undo:hover {
+  border-color: var(--rl-good);
+  color: var(--rl-good);
+}
+
+/* Waiting on you, not on Claude: the same row, without the pulse that means work is happening. */
+/* The first of them takes the slack, so the row's buttons sit together on the right. */
+.working .undo:first-of-type {
+  margin-left: auto;
+}
+.working .hold {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rl-faint);
+  flex: 0 0 auto;
 }
 .working .dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #e0894a;
+  background: var(--rl-accent-text);
   flex: 0 0 auto;
   animation: pulse 1.6s ease-in-out infinite;
 }
@@ -400,16 +902,20 @@ body {
  * The snippet and one line about it. What was said is still there; it is just not worth the
  * room once nobody is going to act on it.
  */
+/*
+ * Centred, not baseline-aligned: an icon has no baseline of its own, so it floated above the
+ * words it belongs with. Everything on this row is one line high and stays on one line.
+ */
 .card.done .summary {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   cursor: pointer;
 }
 .card.done .summary .what {
   flex: 1 1 auto;
   font-size: 13px;
-  color: #8d8a86;
+  color: var(--rl-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -417,7 +923,7 @@ body {
 .card.done .summary .ref {
   font-family: var(--redline-mono);
   font-size: 11px;
-  color: #56585d;
+  color: var(--rl-faint);
   white-space: nowrap;
   flex: 0 0 auto;
 }
@@ -452,21 +958,14 @@ body {
 }
 
 /* A note pointing at something that is no longer there. */
-.where.gone {
-  color: var(--vscode-errorForeground);
-  text-decoration: line-through;
-  cursor: default;
-}
-.where.stale {
-  color: var(--vscode-editorWarning-foreground);
-}
 
-/* Notes held until the agent is free. */
+/* Notes held until the agent is free. Never shrinks: the session name gives way instead. */
 .session .queued {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  margin-left: 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   color: var(--vscode-editorWarning-foreground);
 }
 .session .queued button {
@@ -508,20 +1007,20 @@ body {
 .meta .more {
   background: transparent;
   border: 0;
-  color: #56585d;
+  color: var(--rl-faint);
   cursor: pointer;
   padding: 0 0 0 2px;
   display: inline-flex;
 }
 .meta .more:hover {
-  color: #c9c6c1;
+  color: var(--rl-text);
 }
 .meta .ref.gone {
-  color: #e08d8d;
+  color: var(--rl-bad);
   text-decoration: line-through;
 }
 .meta .ref.stale {
-  color: #d9b169;
+  color: var(--rl-warn);
 }
 
 /* ── screenshots ─────────────────────────────────────────────────────── */
@@ -539,8 +1038,8 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: #17181a;
-  border: 1px solid #2b2c30;
+  background: var(--rl-sunken);
+  border: 1px solid var(--rl-edge-soft);
   border-radius: 7px;
   padding: 7px 9px;
 }
@@ -549,10 +1048,22 @@ body {
   height: 32px;
   object-fit: cover;
   border-radius: 4px;
-  border: 1px solid #2b2c30;
-  background: #212226;
+  border: 1px solid var(--rl-edge-soft);
   cursor: pointer;
   flex: 0 0 auto;
+  /*
+   * Hatching, not a flat panel. The slot is drawn at its final size before the capture has
+   * decoded, so the row does not resize under the pointer — and a screenshot that is mostly
+   * white still reads as an image rather than as a gap in the card.
+   */
+  background-color: var(--rl-settled);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--rl-edge-soft) 0,
+    var(--rl-edge-soft) 1px,
+    transparent 1px,
+    transparent 5px
+  );
 }
 .shot .what {
   display: flex;
@@ -563,7 +1074,7 @@ body {
 }
 .shot .name {
   font-size: 12.5px;
-  color: #d6d3ce;
+  color: var(--rl-said);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -571,19 +1082,19 @@ body {
 .shot .cap {
   font-family: var(--redline-mono);
   font-size: 10.5px;
-  color: #6b6a67;
+  color: var(--rl-faint);
 }
 .shot .x {
   background: transparent;
   border: 0;
-  color: #6b6a67;
+  color: var(--rl-faint);
   cursor: pointer;
   padding: 2px;
   flex: 0 0 auto;
   display: inline-flex;
 }
 .shot .x:hover {
-  color: #e08d8d;
+  color: var(--rl-bad);
 }
 
 /* The follow-up box takes one too, without leaving the box. */
@@ -593,17 +1104,38 @@ body {
   bottom: 6px;
   background: transparent;
   border: 0;
-  color: #6b6a67;
+  color: var(--rl-faint);
   cursor: pointer;
   padding: 2px;
   display: inline-flex;
 }
 .ask .clip:hover {
-  color: #c9c6c1;
+  color: var(--rl-text);
 }
 .actions .plain .codicon {
   margin-right: 5px;
   vertical-align: -1px;
+}
+
+/* Taking a settled note off the list, without going through the overflow menu for it. */
+.card.done .summary .drop {
+  background: transparent;
+  border: 0;
+  color: var(--rl-faint);
+  cursor: pointer;
+  padding: 0 0 0 2px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+.card.done:hover .summary .drop,
+.card.done .summary .drop:focus-visible {
+  opacity: 1;
+}
+.card.done .summary .drop:hover {
+  color: var(--rl-bad);
 }
 
 /* Folded away on a settled card until someone asks to read it back. */
@@ -616,7 +1148,7 @@ body {
   gap: 10px;
 }
 .card.done.open .summary .what {
-  color: #c9c6c1;
+  color: var(--rl-text);
 }
 
 /* ── the overflow menu ───────────────────────────────────────────────── */
@@ -630,11 +1162,11 @@ body {
   z-index: 10;
   min-width: 180px;
   padding: 5px 0;
-  background: #212226;
-  border: 1px solid #3a3c41;
+  background: var(--rl-card);
+  border: 1px solid var(--rl-edge);
   border-radius: 8px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
-  color: #d6d3ce;
+  box-shadow: var(--vscode-widget-shadow, rgb(0 0 0 / 0.45)) 0 8px 20px;
+  color: var(--rl-said);
   font-size: 13px;
 }
 .menu div {
@@ -646,13 +1178,13 @@ body {
   white-space: nowrap;
 }
 .menu div:hover {
-  background: #2b2c30;
-  color: #e6e4e1;
+  background: var(--rl-edge-soft);
+  color: var(--rl-said);
 }
 .menu .mi {
   width: 16px;
   text-align: center;
-  color: #8d8a86;
+  color: var(--rl-muted);
   display: inline-flex;
   justify-content: center;
 }
@@ -661,4 +1193,188 @@ body {
 }
 .menu .codicon {
   font-size: 14px;
+}
+
+/* ── states the script sets on an element ────────────────────────────── */
+/*
+ * These come from `classList.add`, not from a `class="…"` in the markup, which is how they
+ * went missing with the old card block: nothing reads them but the stylesheet, and a rule that
+ * is not there fails silently.
+ */
+
+/*
+ * A file being dragged over this card. Without it there is no sign a drop will land.
+ *
+ * The inset shadow that used to draw this is gone: it was standing in for a border the card
+ * did not have, and beside a real one it was simply a second line of the same colour.
+ */
+.card.dropping {
+  border-color: var(--rl-accent-text);
+}
+
+/*
+ * One row of buttons or the other, never both: what you can answer with, or what you can do
+ * with the reply you are writing. Approve and Not this are about the answer you were given,
+ * and are noise beside a half-written one.
+ */
+.actions.composing {
+  display: none;
+}
+.card.replying .answering {
+  display: none;
+}
+/*
+ * Unless that row is the only way out of where the card is.
+ *
+ * A queued note keeps `pendingReply` set, so a batch queued from a written-but-unsent
+ * follow-up repainted as `replying` and took *Queued — goes when Claude finishes* and its
+ * Cancel down with it: an empty box, Attach and Send, and pressing Send again looked like it
+ * did nothing. The same rule hid *Keep it* on a card that had just been turned down.
+ */
+.card.replying.queued .answering,
+.card.replying.rejected .answering {
+  display: block;
+}
+.card.replying .actions.composing {
+  display: flex;
+}
+
+/*
+ * The box to write a follow-up in: rendered on every live card, shown only when Reply asks
+ * for it.
+ *
+ * It used to sit open under every card that needed an answer, above the buttons — so the
+ * first thing a card asked for was typing, when the usual answer is one of the three buttons
+ * beneath it. Rendered either way, because hiding it with a class rather than leaving it out
+ * means a repaint cannot lose what is half-written in it.
+ */
+.block.follow.compose {
+  display: none;
+}
+.card.replying .block.follow.compose {
+  display: block;
+}
+
+/*
+ * A button whose command is still running, and the row it sits in. The button keeps its own
+ * label and its own width — the card behind it is what says something is happening, so
+ * nothing under it moves while you wait.
+ */
+.actions button.busy,
+.session .scope button.busy {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--vscode-foreground);
+  pointer-events: none;
+}
+.session .controls button.busy {
+  pointer-events: none;
+}
+/*
+ * A row whose command is still running. Deliberately not `working` — that is the class on a
+ * card's status row, and it carries a dark padded box, which is what the session switcher was
+ * drawing around itself and growing the card with.
+ */
+.actions.running button:not(.busy),
+.session .controls.running > *:not(.busy) {
+  opacity: 0.35;
+  pointer-events: none;
+}
+/* The card a note's own command is running on, coloured the same way as the session card. */
+.card.busy {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+@keyframes codicon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Taking back a follow-up Claude has not seen. */
+.block-label .who {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.block-label .drop {
+  background: transparent;
+  border: 0;
+  color: var(--rl-faint);
+  cursor: pointer;
+  padding: 0;
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+.block-label .drop:hover {
+  color: var(--rl-bad);
+}
+/* A settled card names its kind beside the word. */
+.card.done .summary .kind {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.card.done .summary .kind .codicon {
+  font-size: 12px;
+}
+
+/* The two things worth doing from an empty panel, offered rather than described. */
+.empty .link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.empty .link:hover {
+  filter: brightness(1.15);
+}
+
+/* ── the kinds, by colour ─────────────────────────────────────────────── */
+/*
+ * Ten colours that have to stay apart from each other, so these are the panel's own rather
+ * than the theme's — there is no set of ten theme variables that stays distinguishable.
+ *
+ * Each kind only *names* its colour; one rule below spends it. That is what lets a light theme
+ * darken all ten in a single place: these are picked to sit on a dark card, and a pale yellow
+ * on a white one is a colour nobody can see.
+ *
+ * They are classes and not inline `style` attributes because the panel's CSP has no
+ * `'unsafe-inline'` for styles, and every one of those was being dropped without a word.
+ */
+.k-comment {
+  --k: #e0894a;
+}
+.k-bug {
+  --k: #e08d8d;
+}
+.k-security {
+  --k: #d9b169;
+}
+.k-perf {
+  --k: #d9c46a;
+}
+.k-idea {
+  --k: #a8c97f;
+}
+.k-refactor {
+  --k: #7fc4b8;
+}
+.k-question {
+  --k: #8ab4d8;
+}
+.k-todo {
+  --k: #a99bd6;
+}
+.k-nit {
+  --k: #9a9793;
+}
+.k-praise {
+  --k: #d89ab4;
+}
+
+.kind {
+  color: var(--k, currentColor);
+}
+body.vscode-light .kind,
+body.vscode-high-contrast-light .kind {
+  color: color-mix(in srgb, var(--k, currentColor) 75%, #000);
 }

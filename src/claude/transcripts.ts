@@ -25,6 +25,22 @@ export function projectSlug(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9-]/g, '-');
 }
 
+/**
+ * Does a slug name a directory this window cares about?
+ *
+ * The slug is lossy — every character outside `[A-Za-z0-9-]` becomes `-` — so it cannot be
+ * turned back into a path. Comparing slugs works anyway, in both directions: a session run
+ * inside the workspace produces a longer slug that starts with ours, and one run in a parent
+ * of it (a window open on one package, the agent at the repository root) produces a shorter
+ * one that ours starts with. The trailing `-` is what keeps `app` from matching `app2`.
+ *
+ * With no folders to compare against, everything matches: better noisy than deaf.
+ */
+export function slugInScope(slug: string, roots: readonly string[]): boolean {
+  if (roots.length === 0) return true;
+  return roots.some((r) => slug === r || slug.startsWith(`${r}-`) || r.startsWith(`${slug}-`));
+}
+
 function projectsDir(): string {
   return path.join(os.homedir(), '.claude', 'projects');
 }

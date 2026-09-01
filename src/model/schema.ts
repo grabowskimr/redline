@@ -135,6 +135,24 @@ export function migrate(raw: unknown): MigrateResult {
   }
   const allSeqs = [...active.batch.notes, ...archive.flatMap((b) => b.notes)].map((n) => n.seq);
   const nextSeq = Math.max(typeof raw['nextSeq'] === 'number' ? raw['nextSeq'] : 1, ...allSeqs.map((n) => n + 1), 1);
+  /*
+   * Backfill the waterline on notes written before it existed.
+   *
+   * `addendaAtSend` is how many turns had been written when a note was last sent; anything past
+   * it is a reply the agent has not seen. Absent, the predicates fall back to "all of them
+   * seen", which is right for the turns already on the note and wrong for the next one: a
+   * follow-up typed on such a note counts as seen the moment it is typed, so it is never
+   * offered for sending and the card does not even mark it. Stamping the count once, here, ends
+   * that — every turn now on the note is history, and the next one is not.
+   *
+   * Done at load rather than in the predicates because "how many had been sent" is a fact about
+   * the past. Deriving it live means it changes every time someone types.
+   */
+  for (const note of [...active.batch.notes, ...archive.flatMap((b) => b.notes)]) {
+    if (note.sent && note.sent.addendaAtSend === undefined) {
+      note.sent.addendaAtSend = note.addenda.length;
+    }
+  }
   const state: PersistedState = { version: SCHEMA_VERSION, active: active.batch, archive, nextSeq };
   const bl = raw['baseline'];
   if (isObj(bl) && typeof bl['sha'] === 'string' && typeof bl['at'] === 'string') {

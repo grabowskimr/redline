@@ -1,6 +1,9 @@
 import * as assert from 'node:assert/strict';
 import * as path from 'node:path';
+import * as os from 'node:os';
+import { readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import * as vscode from 'vscode';
+import { projectSlug } from '../../../claude/transcripts';
 
 const EXT_ID = 'marcin.redline';
 
@@ -18,7 +21,6 @@ interface Api {
     update(id: string, patch: Record<string, unknown>): void;
     delete(ids: string[]): void;
   };
-  replyOpenOn: (noteId: string) => boolean;
   createNoteAt: (u: vscode.Uri, r: vscode.Range, b: string) => Promise<{ id: string; seq: number } | undefined>;
   panelReady: (timeoutMs?: number) => Promise<boolean>;
   attachFile: (noteId: string, name: string, bytes: Uint8Array) => Promise<string | undefined>;
@@ -35,8 +37,86 @@ const PNG = Buffer.from(
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The batch that was just handed over, wherever it went.
+ *
+ * Not simply the clipboard. With the Claude Code plugin installed — which is how the tool is
+ * meant to be run — a send with no session VS Code can type into *stages* the batch for the
+ * hook and leaves the delivery word on the clipboard instead of the prompt. Asserting on the
+ * clipboard therefore passed or failed on whether the machine running the tests had the plugin
+ * set up, which is not something these tests are about.
+ */
+async function batchText(): Promise<string> {
+  const clip = await vscode.env.clipboard.readText();
+  if (clip.startsWith('I reviewed the generated code')) return clip;
+  for (const outbox of await outboxPaths()) {
+    const staged = await readFile(outbox, 'utf8').catch(() => undefined);
+    if (staged !== undefined) return staged;
+  }
+  return clip;
+}
+
+/**
+ * Every place a staged batch could land, nearest first.
+ *
+ * Staging goes to the *repository* root, which is not the workspace folder — the fixture is a
+ * directory inside this repo — so the walk up is what the extension's own `repoRoot()` does.
+ */
+async function outboxPaths(): Promise<string[]> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return [];
+  let dir = await realpath(folder.uri.fsPath).catch(() => folder.uri.fsPath);
+  const out: string[] = [];
+  for (;;) {
+    out.push(path.join(os.homedir(), '.claude', 'redline', projectSlug(dir), 'outbox.md'));
+    const up = path.dirname(dir);
+    if (up === dir) return out;
+    dir = up;
+  }
+}
+
+/**
+ * Waits for the editor area to actually go quiet, not just for
+ * `workbench.action.closeAllEditors` to return.
+ *
+ * `tabGroups` going empty is necessary but not sufficient: it happens as soon as the tabs
+ * are gone from the UI, which measurably happens before the workbench is done with them —
+ * closing dozens of diff editors against a repo with real, ongoing changes (what
+ * `reviewChanges`/`reviewAllChanges` do here) leaves teardown work in flight that
+ * `closeAllEditors`'s own promise does not wait for. A test that returns right after
+ * `closeAllEditors` hands that leftover work to whatever runs next, which pays for it as
+ * its own time budget — and reads as an unrelated flake in a completely different test.
+ * That is what blew "reviews changes and walks them without throwing"'s 20s timeout here:
+ * not open tabs, but a workbench still busy after they were closed.
+ *
+ * There is no stable API that reports "still tearing down", so this polls for the nearest
+ * observable proxy: after the tab list is empty, it times a real, cheap open-then-close of
+ * an ordinary editor and requires two of those round trips in a row to come back fast. That
+ * is the same capability the next editor-opening test needs, so proving it is fast is
+ * proving the workbench is actually free to give it — a bounded, real-work check, not a
+ * delay that hopes enough time has passed.
+ */
+async function waitForWorkbenchToSettle(probeUri: vscode.Uri, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (vscode.window.tabGroups.all.some((g) => g.tabs.length > 0)) {
+    if (Date.now() >= deadline) return;
+    await sleep(50);
+  }
+  const FAST_MS = 400;
+  let consecutiveFast = 0;
+  while (consecutiveFast < 2 && Date.now() < deadline) {
+    const t0 = Date.now();
+    const doc = await vscode.workspace.openTextDocument(probeUri);
+    await vscode.window.showTextDocument(doc, { preview: true });
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    consecutiveFast = Date.now() - t0 < FAST_MS ? consecutiveFast + 1 : 0;
+  }
+}
+
 describe('Redline (integration)', function () {
   let sampleUri: vscode.Uri;
+  /** What was staged in the real home directory before the suite ran, to be put back after. */
+  let staged: ReadonlyArray<readonly [string, string | undefined]> = [];
   let api: Api;
 
   before(async () => {
@@ -51,6 +131,22 @@ describe('Redline (integration)', function () {
       .getConfiguration('redline')
       .update('confirmOnSubmit', false, vscode.ConfigurationTarget.Workspace);
     api.store.clear();
+    /*
+     * Sending here stages a real batch into the real `~/.claude`, because that is what sending
+     * does on a machine with the plugin installed — and it overwrites whatever the person
+     * running the tests had waiting there. It cost one, before anyone noticed the suite was
+     * doing it. Put back in `after`, whether these pass or not.
+     */
+    staged = await Promise.all(
+      (await outboxPaths()).map(async (p) => [p, await readFile(p, 'utf8').catch(() => undefined)] as const),
+    );
+  });
+
+  after(async () => {
+    for (const [p, was] of staged) {
+      if (was === undefined) await rm(p, { force: true });
+      else await writeFile(p, was, 'utf8');
+    }
   });
 
   it('activates quickly and off the startup path', async () => {
@@ -73,66 +169,85 @@ describe('Redline (integration)', function () {
     }
   });
 
-  it('binds a submit action to the reply box in both thread states', async () => {
-    // Without this, an existing note's reply box has no command behind it: typing and
-    // pressing ⌘⏎ does nothing at all, which cannot be diagnosed from the outside.
+  it('offers one box per thread state: write the note, or reply to it', async () => {
+    /*
+     * A widget can be in one of two states and each takes exactly one kind of input. An empty
+     * thread takes the note. A thread holding a note takes a follow-up — which the widget was
+     * not allowed to do while an answered note lost its widget, because then it was a second
+     * box asking for the same thing as the card, about to disappear. The widget stays now.
+     *
+     * What must not come back is *both* at once, which is what this counts.
+     */
     const pkg = vscode.extensions.getExtension(EXT_ID)?.packageJSON as {
-      contributes: { menus: { 'comments/commentThread/context': Array<{ command: string; when: string }> } };
+      contributes: { menus: Record<string, Array<{ command: string; when: string }>> };
     };
-    const entries = pkg.contributes.menus['comments/commentThread/context'];
-    const empty = entries.find((e) => /(?<!!)commentThreadIsEmpty/.test(e.when));
-    const existing = entries.find((e) => e.when.includes('!commentThreadIsEmpty'));
-    assert.ok(empty, 'a new thread can be submitted');
-    assert.ok(existing, 'an existing note can be replied to');
-    assert.notEqual(empty.command, existing.command, 'the two states run different commands');
+    const entries = pkg.contributes.menus['comments/commentThread/context'] ?? [];
+    const empty = entries.filter((e) => /(?<!!)commentThreadIsEmpty/.test(e.when));
+    const holding = entries.filter((e) => /!commentThreadIsEmpty/.test(e.when));
+    assert.deepEqual(
+      empty.map((e) => e.command),
+      ['redline.createNote'],
+      'a new thread takes the note, and nothing else',
+    );
+    assert.deepEqual(
+      holding.map((e) => e.command),
+      ['redline.replyToThread'],
+      'a thread holding a note takes a follow-up, and nothing else',
+    );
+    assert.equal(empty.length + holding.length, entries.length, 'every entry names its state');
 
-    // Escape only fires while the box has focus, so clicking it by accident and then clicking
-    // away must still leave a visible way out.
-    const cancel = entries.find((e) => e.command === 'redline.cancelReply');
-    assert.ok(cancel, 'the reply box offers a cancel action');
-  });
-
-  it('keeps the follow-up box closed until the toolbar asks for it', async () => {
-    // The box used to sit under every note whether or not anything was being written in it,
-    // below a card that already carries the note, the answer and a row of actions.
-    const note = await api.createNoteAt(sampleUri, new vscode.Range(0, 0, 0, 4), 'toolbar follow-up');
-    assert.ok(note, 'a note to attach a widget to');
-    // The widget is on screen when its toolbar is clicked, which is what both commands
-    // resolve the thread from.
-    await vscode.window.showTextDocument(sampleUri, { preview: false });
-    try {
-      assert.equal(api.replyOpenOn(note.id), false, 'no reply box until asked');
-
-      await vscode.commands.executeCommand('redline.followUpHere', note.id);
-      assert.equal(api.replyOpenOn(note.id), true, 'the toolbar opens it');
-
-      // And it survives the store changing underneath, which happens while you type in it.
-      api.store.update(note.id, { body: 'toolbar follow-up, edited' });
-      assert.equal(api.replyOpenOn(note.id), true, 'still open after a refresh');
-
-      await vscode.commands.executeCommand('redline.cancelReply');
-      await new Promise((r) => setTimeout(r, 50));
-      assert.equal(api.replyOpenOn(note.id), false, 'cancel closes it again');
-    } finally {
-      api.store.delete([note.id]);
+    const title = pkg.contributes.menus['comments/commentThread/title'] ?? [];
+    for (const gone of ['redline.followUpHere', 'redline.addFollowUp', 'redline.replyToNote', 'redline.cancelReply']) {
+      assert.equal(
+        [...entries, ...title, ...(pkg.contributes.menus['comments/comment/context'] ?? [])].some(
+          (e) => e.command === gone,
+        ),
+        false,
+        `${gone} is gone from the widget`,
+      );
     }
   });
 
-  it('offers the follow-up button on the widget toolbar, not only in the reply box', () => {
-    const pkg = vscode.extensions.getExtension(EXT_ID)?.packageJSON as {
-      contributes: { menus: Record<string, Array<{ command: string; when: string; group?: string }>> };
-    };
-    const title = pkg.contributes.menus['comments/commentThread/title'] ?? [];
-    const entry = title.find((e) => e.command === 'redline.followUpHere');
-    assert.ok(entry, 'the widget toolbar offers it');
-    assert.match(entry.when, /!commentThreadIsEmpty/, 'a thread with no note has nothing to follow up');
+  it('can open the note widget on a line, the way the gutter + does', async () => {
+    /*
+     * The keyboard route to a note. It asks the editor to open the widget rather than building
+     * a thread itself — the editor knows where the commentable ranges are, how to focus the
+     * box, and what to do when you press Escape. This is the test that the command it leans on
+     * actually exists: if a future VS Code drops it, the fallback prompt takes over silently
+     * and nobody would notice until they used it.
+     */
+    const commands = await vscode.commands.getCommands(true);
+    assert.ok(
+      commands.includes('workbench.action.addComment'),
+      'the editor still offers a way to open a comment widget',
+    );
 
-    // Beside send, and before it: writing the follow-up is what you do first. The toolbar is a
-    // row of icons with nothing to explain them, so their order is the only grouping there is.
-    const rank = (command: string): number =>
-      Number(/navigation@([\d.]+)/.exec(title.find((e) => e.command === command)?.group ?? '')?.[1] ?? NaN);
-    assert.ok(rank('redline.followUpHere') < rank('redline.sendSelected'), 'follow-up comes before send');
-    assert.equal(rank('redline.sendSelected') - rank('redline.followUpHere'), 1, 'with nothing between them');
+    const doc = await vscode.workspace.openTextDocument(sampleUri);
+    await vscode.window.showTextDocument(doc, { preview: false });
+    await assert.doesNotReject(async () => {
+      await vscode.commands.executeCommand('redline.addNoteHere');
+    });
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  });
+
+  it('leaves the editor alone when a change is turned down', async () => {
+    // It used to reveal and focus the widget's reply box, moving the cursor into a file you
+    // were not editing. The card carries the reason now, and the panel puts the cursor there.
+    const note = await api.createNoteAt(sampleUri, new vscode.Range(0, 0, 0, 4), 'turn this down');
+    assert.ok(note, 'a note to turn down');
+    const doc = await vscode.workspace.openTextDocument(sampleUri);
+    const editor = await vscode.window.showTextDocument(doc, { preview: false });
+    try {
+      const before = editor.selection;
+      await vscode.commands.executeCommand('redline.needsWork', note.id);
+      assert.ok(
+        api.store.notes.some((x) => x.id === note.id),
+        'the note is still there to carry the reason',
+      );
+      assert.ok(editor.selection.isEqual(before), 'the cursor has not been moved');
+    } finally {
+      api.store.delete([note.id]);
+    }
   });
 
   it('runs every palette-safe command with no arguments without throwing', async () => {
@@ -151,9 +266,43 @@ describe('Redline (integration)', function () {
       // test run should do to the machine it runs on.
       'redline.setUpHook',
     ]);
-    for (const c of pkg.contributes.commands) {
-      if (hidden.has(c.command) || interactive.has(c.command)) continue;
-      await vscode.commands.executeCommand(c.command);
+    try {
+      for (const c of pkg.contributes.commands) {
+        if (hidden.has(c.command) || interactive.has(c.command)) continue;
+        /*
+         * Raced, and the picker dismissed after each one.
+         *
+         * Several of these end in a quick pick, whose promise does not settle until something
+         * dismisses it. Opening the next one cancelled the last, which is why this looked like
+         * every command returning — until the *final* command in the list opened one, and there
+         * was nothing behind it: the loop waited for a person, the test timed out at twenty
+         * seconds, and the picker it left open swallowed the input of every test after it. Three
+         * failures, one of them here.
+         *
+         * Which command is last depends on the order in `package.json`, and whether a picker
+         * opens at all depends on the machine — this one only shows its list if the plugin has
+         * recorded a run for this folder. Neither is something a test should turn on.
+         */
+        await Promise.race([vscode.commands.executeCommand(c.command), sleep(1500)]);
+        await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+      }
+    } finally {
+      // reviewChanges/reviewAllChanges are in this loop and are not exercised anywhere
+      // else — they open a multi-file diff editor against every uncommitted change in
+      // whatever repo the test runner sits in, which on a working checkout is dozens of
+      // tabs, some pointing at git refs a since-staged rename has made unresolvable. Left
+      // open, that pile sat through every later test and made "reviews changes and walks
+      // them without throwing" open a second such diff on top of it — the extra editor-
+      // resolution load was enough to blow that test's 20s budget on a loaded machine,
+      // intermittently. In `finally` so a failed assertion above still leaves a clean
+      // editor area for what runs next.
+      //
+      // Closing is not enough by itself: `closeAllEditors` resolves before the ~90
+      // editor/diff models it just closed finish being disposed, so without waiting here
+      // the *next* test inherits that teardown mid-flight — which is what actually blew
+      // the 20s budget on "reviews changes and walks them", not the open tabs themselves.
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await waitForWorkbenchToSettle(sampleUri);
     }
   });
 
@@ -174,12 +323,18 @@ describe('Redline (integration)', function () {
     await vscode.env.clipboard.writeText('');
     await vscode.commands.executeCommand('redline.submit');
     await sleep(400);
-    const text = await vscode.env.clipboard.readText();
-    assert.ok(text.startsWith('I reviewed the generated code'), 'clipboard holds the prompt');
+    const text = await batchText();
+    assert.ok(text.startsWith('I reviewed the generated code'), 'the batch was handed over');
     assert.ok(text.includes('— src/sample.ts · Line 5'), 'file and 1-based line');
     assert.ok(text.includes('User comment: "Rename to subtract"'), 'body');
     assert.ok(text.includes('export function sub(a: number, b: number): number {'), 'code snippet');
-    assert.ok(text.includes('## When you are done'), 'report-back protocol');
+    // Either form of the same contract: the plugin asks for a JSON file, a bare install asks
+    // for a line per note in the reply. Which one you get depends on whether the machine has
+    // the plugin, which is not what this test is about.
+    assert.ok(
+      text.includes('## Reporting back') || text.includes('## When you are done'),
+      'report-back protocol',
+    );
 
     const sent = api.store.notes[0];
     assert.ok(sent?.sent, 'note kept as sent');
@@ -210,7 +365,7 @@ describe('Redline (integration)', function () {
     await vscode.env.clipboard.writeText('');
     await vscode.commands.executeCommand('redline.submit');
     await sleep(400);
-    const prompt = await vscode.env.clipboard.readText();
+    const prompt = await batchText();
     assert.ok(prompt.includes(`Screenshot: ${stored}`), 'prompt references the screenshot');
     api.store.clearSent();
   });
@@ -259,12 +414,22 @@ describe('Redline (integration)', function () {
     // regresses, the panel silently falls back to a 30-second backstop.
     const os = await import('node:os');
     const fs = await import('node:fs/promises');
-    const dir = path.join(os.homedir(), '.claude', 'redline', `-redline-test-${Date.now()}`);
+    const { projectSlug } = await import('../../../claude/transcripts.js');
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    assert.ok(folder, 'a workspace to attribute the run to');
+    // This window's own directory. The watcher covers every project on the machine and only
+    // answers for the ones this window is looking at, so a made-up slug is correctly ignored.
+    const dir = path.join(os.homedir(), '.claude', 'redline', projectSlug(folder));
+    const log = path.join(dir, 'touched.jsonl');
+    const existed = await fs
+      .stat(log)
+      .then(() => true)
+      .catch(() => false);
     const before = api.hookSignals().touched;
     await fs.mkdir(dir, { recursive: true });
     try {
-      await fs.writeFile(
-        path.join(dir, 'touched.jsonl'),
+      await fs.appendFile(
+        log,
         JSON.stringify({ at: new Date().toISOString(), session: 't', file: '/tmp/x.ts', via: 'edit' }) + '\n',
         'utf8',
       );
@@ -273,6 +438,30 @@ describe('Redline (integration)', function () {
         await new Promise((r) => setTimeout(r, 200));
       }
       assert.ok(api.hookSignals().touched > before, 'the extension saw the hook write the log');
+    } finally {
+      // Only what this test created: the directory belongs to the machine, not to the test.
+      if (!existed) await fs.rm(log, { force: true });
+    }
+  });
+
+  it('ignores a run in a repository this window is not looking at', async () => {
+    // The hook writes one directory per working directory under a tree that is watched whole.
+    // Without this filter a run in any other repo woke every open window several times a
+    // second — a git recompute and a session discovery each time, for work off screen.
+    const os = await import('node:os');
+    const fs = await import('node:fs/promises');
+    const dir = path.join(os.homedir(), '.claude', 'redline', `-somewhere-else-${Date.now()}`);
+    const before = api.hookSignals().touched;
+    await fs.mkdir(dir, { recursive: true });
+    try {
+      await fs.writeFile(
+        path.join(dir, 'touched.jsonl'),
+        JSON.stringify({ at: new Date().toISOString(), session: 't', file: '/tmp/y.ts', via: 'edit' }) + '\n',
+        'utf8',
+      );
+      // Long enough for the watcher's debounce and then some.
+      await new Promise((r) => setTimeout(r, 1500));
+      assert.equal(api.hookSignals().touched, before, 'not our run, not our problem');
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -303,4 +492,5 @@ describe('Redline (integration)', function () {
     // A cooked tty maps CR→LF for `cat`; a raw-mode TUI receives the CR itself.
     assert.ok(/\^\[\[200~line one(\^M|\n)line two\^\[\[201~/.test(text), `got: ${JSON.stringify(text)}`);
   });
+
 });

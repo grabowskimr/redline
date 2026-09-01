@@ -65,6 +65,19 @@ export class Config implements vscode.Disposable {
     return vscode.workspace.getConfiguration(SECTION).get<T>(key, fallback);
   }
 
+  /**
+   * Minutes of quiet that end a run, when there is no transcript to read a boundary from.
+   *
+   * Read here rather than in `ReviewRange` so it goes through the same `inspect`-based lookup
+   * as everything else: a plain `get` on a key with a manifest default never returns
+   * `undefined`, so the `localReview.*` fallback beside it was unreachable — the one setting
+   * that quietly stopped honouring the rename.
+   */
+  get lastRunGapMinutes(): number {
+    const v = this.get('lastRunGapMinutes', 15);
+    return Number.isFinite(v) && v > 0 ? v : 15;
+  }
+
   get outputTemplate(): OutputTemplate {
     return this.get<string>('outputTemplate', 'claude-prompt') === 'json' ? 'json' : 'claude-prompt';
   }

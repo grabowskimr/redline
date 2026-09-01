@@ -90,11 +90,6 @@ export async function listAgentSessions(claude = 'claude'): Promise<AgentSession
   return inFlight;
 }
 
-/** Drop the cache — a session may have been started since. */
-export function forgetAgentSessions(): void {
-  cache = undefined;
-}
-
 /** For tests: forget that the subcommand was unavailable. */
 export function resetAgentSupport(): void {
   unsupported = false;

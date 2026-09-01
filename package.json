@@ -2,7 +2,7 @@
   "name": "redline",
   "displayName": "Redline",
   "description": "Review Claude Code's work — inline notes on the lines that need changes, handed back as one prompt.",
-  "version": "1.5.3",
+  "version": "1.7.0",
   "publisher": "marcin",
   "license": "MIT",
   "repository": {
@@ -53,6 +53,18 @@
         "icon": "$(add)"
       },
       {
+        "command": "redline.replyToThread",
+        "title": "Reply",
+        "category": "Redline",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "redline.addNoteHere",
+        "title": "Add Note Here",
+        "category": "Redline",
+        "icon": "$(comment-add)"
+      },
+      {
         "command": "redline.quickAddNote",
         "title": "Add Note at Cursor",
         "category": "Redline"
@@ -76,11 +88,6 @@
         "icon": "$(close)"
       },
       {
-        "command": "redline.cancelReply",
-        "title": "Cancel",
-        "category": "Redline"
-      },
-      {
         "command": "redline.approveNote",
         "title": "Approve the Change",
         "category": "Redline",
@@ -91,18 +98,6 @@
         "title": "Needs More Work",
         "category": "Redline",
         "icon": "$(thumbsdown)"
-      },
-      {
-        "command": "redline.followUpHere",
-        "title": "Follow-up",
-        "category": "Redline",
-        "icon": "$(comment)"
-      },
-      {
-        "command": "redline.addFollowUp",
-        "title": "Add Follow-up…",
-        "category": "Redline",
-        "icon": "$(comment)"
       },
       {
         "command": "redline.deleteNote",
@@ -129,18 +124,6 @@
         "icon": "$(bug)"
       },
       {
-        "command": "redline.kindSecurity",
-        "title": "Mark as Security issue",
-        "category": "Redline",
-        "icon": "$(shield)"
-      },
-      {
-        "command": "redline.kindPerf",
-        "title": "Mark as Performance issue",
-        "category": "Redline",
-        "icon": "$(dashboard)"
-      },
-      {
         "command": "redline.kindIdea",
         "title": "Mark as Idea (improve / extend this)",
         "category": "Redline",
@@ -159,36 +142,6 @@
         "icon": "$(question)"
       },
       {
-        "command": "redline.kindTodo",
-        "title": "Mark as Todo (follow-up work)",
-        "category": "Redline",
-        "icon": "$(checklist)"
-      },
-      {
-        "command": "redline.kindNit",
-        "title": "Mark as Nit (tiny style thing)",
-        "category": "Redline",
-        "icon": "$(edit)"
-      },
-      {
-        "command": "redline.kindPraise",
-        "title": "Mark as Praise (no action)",
-        "category": "Redline",
-        "icon": "$(heart)"
-      },
-      {
-        "command": "redline.addSuggestion",
-        "title": "Add Suggested Change…",
-        "category": "Redline",
-        "icon": "$(diff)"
-      },
-      {
-        "command": "redline.applySuggestion",
-        "title": "Apply Suggested Change Locally",
-        "category": "Redline",
-        "icon": "$(check)"
-      },
-      {
         "command": "redline.toggleDone",
         "title": "Toggle Done",
         "category": "Redline",
@@ -204,12 +157,6 @@
         "title": "Re-anchor at Cursor",
         "category": "Redline",
         "icon": "$(pin)"
-      },
-      {
-        "command": "redline.reviseNote",
-        "title": "Revise… (not what I meant)",
-        "category": "Redline",
-        "icon": "$(issue-reopened)"
       },
       {
         "command": "redline.submit",
@@ -331,12 +278,6 @@
         "title": "Review a Previous Run",
         "category": "Redline",
         "icon": "$(history)"
-      },
-      {
-        "command": "redline.replyToNote",
-        "title": "Add Follow-up",
-        "category": "Redline",
-        "icon": "$(reply)"
       }
     ],
     "viewsContainers": {
@@ -362,19 +303,14 @@
     "menus": {
       "comments/commentThread/context": [
         {
-          "command": "redline.replyToNote",
-          "group": "inline@1",
-          "when": "commentController == redline.notes && !commentThreadIsEmpty"
-        },
-        {
           "command": "redline.createNote",
           "group": "inline@2",
           "when": "commentController == redline.notes && commentThreadIsEmpty"
         },
         {
-          "command": "redline.cancelReply",
-          "group": "inline@3",
-          "when": "commentController == redline.notes"
+          "command": "redline.replyToThread",
+          "when": "commentController == redline.notes && !commentThreadIsEmpty",
+          "group": "inline@1"
         }
       ],
       "comments/commentThread/title": [
@@ -409,11 +345,6 @@
           "when": "commentController == redline.notes && !commentThreadIsEmpty"
         },
         {
-          "command": "redline.followUpHere",
-          "group": "navigation@7",
-          "when": "commentController == redline.notes && !commentThreadIsEmpty"
-        },
-        {
           "command": "redline.sendSelected",
           "group": "navigation@8",
           "when": "commentController == redline.notes && !commentThreadIsEmpty"
@@ -433,16 +364,6 @@
         {
           "command": "redline.setKind",
           "group": "group@2",
-          "when": "commentController == redline.notes && comment == redline.comment"
-        },
-        {
-          "command": "redline.addFollowUp",
-          "group": "group@3",
-          "when": "commentController == redline.notes && comment == redline.comment"
-        },
-        {
-          "command": "redline.addSuggestion",
-          "group": "group@4",
           "when": "commentController == redline.notes && comment == redline.comment"
         },
         {
@@ -537,6 +458,11 @@
       ],
       "editor/context": [
         {
+          "command": "redline.addNoteHere",
+          "group": "redline@1",
+          "when": "editorTextFocus"
+        },
+        {
           "command": "redline.quickAddNote",
           "when": "editorTextFocus",
           "group": "1_redline@1"
@@ -564,10 +490,6 @@
           "when": "false"
         },
         {
-          "command": "redline.cancelReply",
-          "when": "false"
-        },
-        {
           "command": "redline.sendSelected",
           "when": "false"
         },
@@ -584,22 +506,6 @@
           "when": "false"
         },
         {
-          "command": "redline.addSuggestion",
-          "when": "false"
-        },
-        {
-          "command": "redline.applySuggestion",
-          "when": "false"
-        },
-        {
-          "command": "redline.addFollowUp",
-          "when": "false"
-        },
-        {
-          "command": "redline.reviseNote",
-          "when": "false"
-        },
-        {
           "command": "redline.setKind",
           "when": "false"
         },
@@ -609,14 +515,6 @@
         },
         {
           "command": "redline.kindBug",
-          "when": "false"
-        },
-        {
-          "command": "redline.kindSecurity",
-          "when": "false"
-        },
-        {
-          "command": "redline.kindPerf",
           "when": "false"
         },
         {
@@ -632,23 +530,7 @@
           "when": "false"
         },
         {
-          "command": "redline.kindTodo",
-          "when": "false"
-        },
-        {
-          "command": "redline.kindNit",
-          "when": "false"
-        },
-        {
-          "command": "redline.kindPraise",
-          "when": "false"
-        },
-        {
           "command": "redline.kindChange",
-          "when": "false"
-        },
-        {
-          "command": "redline.followUpHere",
           "when": "false"
         },
         {
@@ -663,6 +545,12 @@
     },
     "keybindings": [
       {
+        "command": "redline.addNoteHere",
+        "key": "ctrl+r",
+        "mac": "cmd+r",
+        "when": "editorTextFocus && !editorReadonly"
+      },
+      {
         "command": "redline.quickAddNote",
         "key": "ctrl+alt+m",
         "mac": "cmd+alt+m",
@@ -672,7 +560,7 @@
         "command": "redline.submit",
         "key": "ctrl+alt+s",
         "mac": "cmd+alt+s",
-        "when": "redline.hasNotes"
+        "when": "redline.canSend"
       },
       {
         "command": "redline.nextChange",
@@ -681,11 +569,6 @@
       {
         "command": "redline.prevChange",
         "key": "shift+alt+f7"
-      },
-      {
-        "command": "redline.cancelReply",
-        "key": "escape",
-        "when": "commentEditorFocused && !suggestWidgetVisible && !findWidgetVisible"
       }
     ],
     "configuration": {
@@ -700,7 +583,7 @@
           "default": "claude-prompt",
           "enumDescriptions": [
             "A prompt for Claude Code: notes grouped by intent with code and screenshots.",
-            "Structured JSON for scripts."
+            "Structured JSON for scripts. Claude is not asked for a report, so outcomes do not come back and cards stay unanswered."
           ],
           "description": "Format used when sending or previewing notes."
         },
@@ -840,11 +723,6 @@
           "description": "Remove notes Claude reported as done. Off by default: the note stays on the line so you can reply to what it did."
         }
       }
-    },
-    "configurationDefaults": {
-      "workbench.colorCustomizations": {
-        "editorCommentsWidget.replyInputBackground": "#00000000"
-      }
     }
   },
   "scripts": {
@@ -852,11 +730,10 @@
     "watch": "node esbuild.js --watch",
     "package": "npm run check && npm run compile -- --production && vsce package --no-dependencies",
     "check": "tsc --noEmit -p ./",
-    "check:mirror": "diff -q resources/redline-touched.mjs plugin/hooks/redline-touched.mjs && diff -q resources/redline-touched.sh plugin/hooks/redline-touched.sh",
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.ts\"",
-    "test": "npm run check && npm run check:mirror && npm run check:media && npm run test:unit",
-    "test:unit": "tsc -p tsconfig.test.json && mocha \"out/test/unit/**/*.test.js\"",
+    "test": "npm run check && npm run check:media && npm run test:unit",
+    "test:unit": "rm -rf out/test && tsc -p tsconfig.test.json && mocha \"out/test/unit/**/*.test.js\"",
     "test:integration": "npm run compile && tsc -p tsconfig.test.json && node out/test/integration/runTests.js",
     "vscode:prepublish": "npm run compile -- --production",
     "check:media": "node --check media/cards.js",

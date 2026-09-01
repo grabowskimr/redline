@@ -19,14 +19,16 @@ export interface Deps {
   host: CommentHost;
   git: GitService;
   index: NoteIndex;
+  /**
+   * Throw away screenshots no note refers to any more.
+   *
+   * Called when a note is gone for good — not when it is deleted, which is undoable, and an
+   * Undo that brought back a note whose pictures had been deleted would be a worse outcome
+   * than a file left behind.
+   */
+  sweepAttachments?: () => void;
   range: ReviewRange;
   watcher: SessionWatcher;
-  /**
-   * Send one note's whole conversation back to the agent. Assigned after the batch commands
-   * exist, because a reply typed in the comment widget has to reach them and note commands
-   * are built first.
-   */
-  replyToClaude?: (noteId: string) => Promise<void>;
 }
 
 function isThread(v: unknown): v is vscode.CommentThread {

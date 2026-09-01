@@ -15,11 +15,11 @@
  * interferes with the turn it is attached to, and none of this is worth that. Every failure
  * path is silent.
  */
-import { appendFile, mkdir, stat, writeFile, readFile, readdir, unlink, copyFile, rename, rm } from 'node:fs/promises';
+import { appendFile, mkdir, stat, utimes, writeFile, readFile, readdir, unlink, copyFile, rename, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
@@ -45,10 +45,16 @@ const logDir = (root) => join(homedir(), '.claude', 'redline', slug(root));
  */
 async function repoRoot(cwd) {
   try {
-    const { stdout } = await execFileP('git', ['rev-parse', '--show-toplevel'], { cwd });
+    // Bounded, like everything else here. This runs on every hook event, including every edit
+    // the agent makes, and a `git` that never returns holds up the tool call it is attached
+    // to — which is the one thing this file promises not to do.
+    const { stdout } = await execFileP('git', ['rev-parse', '--show-toplevel'], {
+      cwd,
+      timeout: QUICK_TIMEOUT_MS,
+    });
     return stdout.trim() || cwd;
   } catch {
-    return cwd; // not a repository; keep the caller's directory
+    return cwd; // not a repository, git unavailable, or too slow
   }
 }
 
@@ -149,6 +155,9 @@ async function bashEnd(root, sessionId) {
   const { stdout } = await execFileP('git', ['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', 'HEAD'], {
     cwd: root,
     maxBuffer: 16 * 1024 * 1024,
+    // Runs after every Bash tool call the agent makes, so it is on the critical path of the
+    // turn. Better to attribute nothing than to hold the agent up.
+    timeout: QUICK_TIMEOUT_MS,
   });
   const changed = stdout.split('\0').filter(Boolean);
   const touched = [];
@@ -181,7 +190,25 @@ async function bashEnd(root, sessionId) {
  * "before" is not before anything. Measured at ~0.9s in a 42k-file monorepo.
  */
 async function snapshotTree(root) {
-  const shadow = join(tmpdir(), `redline-${createHash('sha1').update(root).digest('hex').slice(0, 16)}.hook.index`);
+  /*
+   * A scratch index of this call's own.
+   *
+   * Two sessions working in one worktree ran this at the same time on one path, and git's
+   * `index.lock` is per file: one of them failed with "Another git process seems to be
+   * running", and that run lost its "before" — so everything it changed was attributed to
+   * whatever came next. The pid and a counter are what keep them apart; the extension's copy
+   * of this routine has done it that way since the same thing happened there.
+   */
+  /*
+   * The random part is what keeps the path out of an attacker's reach. The hash is of a path
+   * that can be guessed and pid space is small, and on Linux `tmpdir()` is the world-writable
+   * `/tmp` — anyone can pre-create this name as a symlink, and the `copyFile` below follows
+   * the destination, so `~/.bashrc` would be truncated and overwritten with a git index. The
+   * extension's copy of this routine (`src/git/snapshotTree.ts`) carries the same guard.
+   */
+  const key = createHash('sha1').update(root).digest('hex').slice(0, 16);
+  const nonce = randomBytes(8).toString('hex');
+  const shadow = join(tmpdir(), `redline-${key}-${process.pid}-${(snapshotSeq += 1)}-${nonce}.hook.index`);
   const git = (args, env) =>
     execFileP('git', ['-c', 'core.quotePath=false', ...args], {
       cwd: root,
@@ -194,22 +221,78 @@ async function snapshotTree(root) {
     const real = indexPath.trim();
     if (real) {
       try {
-        await copyFile(resolve(root, real), shadow);
+        const from = resolve(root, real);
+        await copyFile(from, shadow);
+        /*
+         * ... and give the copy the original's timestamp back.
+         *
+         * Staging skips a file whose stat still matches its index entry, and git's guard
+         * against that missing an edit is the index's own mtime: an entry stamped at or after
+         * it is "racily clean" — modified so soon after it was staged that the stat cannot be
+         * trusted — and git compares the content instead. Copying resets the mtime to now, so
+         * every entry looks safely older than the index it sits in, the guard never fires, and
+         * an edit made in the same second as the last staging is read out of the stat cache:
+         * two snapshots, one tree, a run that changed a file and reported nothing changed.
+         *
+         * Rare — it needs an edit inside that one second — but it lasts, because the cached
+         * stat stays wrong until something refreshes the real index.
+         *
+         * Truncated to the millisecond rather than rounded, which is all `utimes` carries:
+         * rounding puts the copy up to half a millisecond *after* the index it came from, and
+         * that is the same hole again, narrower. Erring early only re-reads a file.
+         */
+        try {
+          const { atimeNs, mtimeNs } = await stat(from, { bigint: true });
+          const seconds = (ns) => Number(ns / 1000000n) / 1000;
+          await utimes(shadow, seconds(atimeNs), seconds(mtimeNs));
+        } catch {
+        // Its own guard: a failure here means the copy simply keeps the time of the copy,
+        // which is the old behaviour. Folded into the outer `catch` it would have discarded
+        // the copied index and staged the whole repository from empty — seconds of work, on
+        // every snapshot, because a timestamp could not be set.
+        }
       } catch {
         await rm(shadow, { force: true }); // no index yet: stage from empty
       }
     }
-    await git(['add', '-A', '--ignore-errors', '--'], { GIT_INDEX_FILE: shadow });
+    try {
+      await git(['add', '-A', '--ignore-errors', '--'], { GIT_INDEX_FILE: shadow });
+    } catch {
+      /*
+       * `--ignore-errors` still exits non-zero when a file vanishes mid-walk — which is the
+       * normal state of a tree an agent is working in. Everything it did stage is in the
+       * scratch index, so the tree is written anyway; abandoning here means the run has no
+       * "before" at all, and everything it changes is attributed to whatever comes next.
+       *
+       * The extension's copy of this routine has done it this way since the same thing
+       * happened there.
+       */
+    }
     const { stdout } = await git(['write-tree'], { GIT_INDEX_FILE: shadow });
     const tree = stdout.trim();
     return /^[0-9a-f]{40,64}$/.test(tree) ? tree : undefined;
   } catch {
     return undefined; // not a repository, git unavailable, or too slow
+  } finally {
+    // Several megabytes per call, in the temp directory, once per run. Nothing else was ever
+    // going to remove them.
+    await rm(shadow, { force: true }).catch(() => undefined);
   }
 }
 
+/** Tells one call's scratch index from the next one's inside a single process. */
+let snapshotSeq = 0;
+
 /** Beyond this the snapshot is holding up the turn; the older signals cover the gap. */
 const SNAPSHOT_TIMEOUT_MS = 30_000;
+
+/**
+ * For the git calls that sit on the critical path of every tool call.
+ *
+ * Much shorter than the snapshot's: this one runs constantly and the answer is only ever used
+ * to attribute a file to a run. Losing that is a smaller price than a stalled agent.
+ */
+const QUICK_TIMEOUT_MS = 5_000;
 
 /** How many finished runs stay reachable. */
 const MAX_RUN_HISTORY = 5;
@@ -303,15 +386,25 @@ async function takePendingReview(root, prompt) {
   }
 }
 
-/** Tells Redline the hook is installed and live here, so it can choose how to deliver. */
+/**
+ * Tells Redline the hook is installed and live here, so it can choose how to deliver.
+ *
+ * Renamed into place, like `runs.json` and the outbox. Redline parses this file the moment it
+ * needs a delivery token, which can land mid-write: a torn read throws, `deliveryToken`
+ * answers "no plugin here", and a batch that could have been handed over is marked
+ * clipboard-only instead.
+ */
 async function markAlive(root) {
   const dir = logDir(root);
   await mkdir(dir, { recursive: true });
+  const file = join(dir, 'hook.json');
+  const temp = `${file}.${process.pid}.tmp`;
   await writeFile(
-    join(dir, 'hook.json'),
+    temp,
     JSON.stringify({ name: 'redline', version: 1, token: DELIVERY_TOKEN, at: new Date().toISOString() }),
     'utf8',
   );
+  await rename(temp, file);
 }
 
 /**
@@ -327,11 +420,18 @@ async function runEnded(root, sessionId) {
   // Snapshotted before the marker is written, so that by the time Redline reacts to the marker
   // the exact result of the run is already on disk and the panel has nothing left to compute.
   const tree = await snapshotTree(root);
+  // Renamed into place, like `runs.json` and the outbox. Redline's `HookSignals` fires on the
+  // create event and parses this file straight away, so a plain write is read torn: the parse
+  // fails, the extension takes its "hook too old to record a tree" branch and guesses the
+  // session the run belonged to.
+  const stopped = join(dir, 'stopped.json');
+  const stoppedTemp = `${stopped}.${process.pid}.tmp`;
   await writeFile(
-    join(dir, 'stopped.json'),
+    stoppedTemp,
     JSON.stringify({ at: new Date().toISOString(), session: sessionId, tree }),
     'utf8',
   );
+  await rename(stoppedTemp, stopped);
   await trimLog(join(dir, 'touched.jsonl'));
   await sweepMarkers(dir);
   // Earlier versions kept a directory of copied files here to serve as the run's "before".

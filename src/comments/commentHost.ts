@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { Config } from '../config';
 import { Logger } from '../logger';
-import { ReviewNote } from '../model/note';
+import { ReviewNote, showsInEditor } from '../model/note';
 import { ReviewStore, StoreChange } from '../store/reviewStore';
 import { RangeProvider } from './rangeProvider';
 import { applyNoteToThread, createThread, fromRange, toRange } from './threadFactory';
@@ -42,6 +42,29 @@ export class CommentHost implements vscode.Disposable {
   private readonly threadsByNoteId = new Map<string, vscode.CommentThread>();
   private readonly noteIdByThread = new WeakMap<vscode.CommentThread, string>();
   private readonly subs: vscode.Disposable[] = [];
+  private readonly commentingRange: RangeProvider;
+  /**
+   * Whether a note's own lines have moved since it was sent.
+   *
+   * Set from outside because the answer lives in the index, which is filled by the anchor
+   * tracker as documents are read. Unknown counts as unchanged — see `showsInEditor`.
+   */
+  linesChanged: (noteId: string) => boolean = () => false;
+
+  /**
+   * True while a different surface is meant to be drawing notes — the inset surface, once the
+   * experimental widget is on and available. The approved spec is explicit that the comment
+   * controller stops drawing while the experiment is on ("no + on hover, no Comments-panel
+   * entries, no chance of two widgets on one line"); this is what carries that into code without
+   * disposing `host` itself, which `LiveTracker` holds directly for re-anchoring regardless of
+   * which surface is current (see the note on `host`'s construction in `extension.ts`) — a
+   * disposed `CommentController` would break `threadFor`/`reconcileRanges` for the rest of the
+   * window, not just pause drawing.
+   *
+   * Default `false`, unchanged from today: nothing sets this outside `setSuppressed`, and
+   * comment mode never calls it, so this changes no behaviour for anyone not using the
+   * experiment.
+   */
 
   constructor(
     private readonly store: ReviewStore,
@@ -51,20 +74,21 @@ export class CommentHost implements vscode.Disposable {
   ) {
     this.controller = vscode.comments.createCommentController(CONTROLLER_ID, 'Redline');
     this.controller.options = {
-      // `prompt` labels the collapsed reply box; `placeHolder` is the empty textarea. The
+      // `prompt` labels the collapsed input bar; `placeHolder` is the empty textarea. The
       // widget's own header ("Start discussion") is VS Code's and cannot be set from here.
-      // `prompt` is the collapsed bar, rendered full width and in bold — long text there
-      // reads as a heading rather than an invitation to type.
+      // `prompt` is rendered full width and in bold — long text there reads as a heading
+      // rather than an invitation to type.
       //
-      // One word for one box: it is always present now, on a note Claude has answered and on
-      // one it has never seen, and "follow-up" covers both without changing under you.
-      prompt: 'Follow-up…',
-      // One placeholder serves both a new note and a follow-up — the controller has a single
-      // value for it — so it earns its space by teaching the kind prefixes, which are
-      // otherwise undiscoverable. Matches PREFIX_KINDS in commands/noteCommands.
-      placeHolder: 'What should change here?   ? question · ! bug · * idea · ~ nit · + praise',
+      // Only one box is left in the editor: the one that starts a note. Follow-ups happen on
+      // the card, so this no longer has to cover both and can say what it actually does.
+      prompt: 'Add a note…',
+      // Short: it sits above a box the editor gives a ninety-pixel floor to, and a sentence
+      // that long stretched across an empty field reads as the field's contents. The two
+      // prefixes worth teaching are the two that change what the agent does with the note.
+      placeHolder: 'What should change here?   ? to ask · ! for a bug',
     };
-    this.controller.commentingRangeProvider = new RangeProvider(config);
+    this.commentingRange = new RangeProvider(config);
+    this.controller.commentingRangeProvider = this.commentingRange;
     this.subs.push(
       this.controller,
       // There is no public "commenting ranges changed" event; reassigning the provider
@@ -80,6 +104,44 @@ export class CommentHost implements vscode.Disposable {
     );
     this.materialiseFor(vscode.window.visibleTextEditors);
   }
+
+  /**
+   * Re-decide, for every note, whether it still belongs in the editor.
+   *
+   * The store is not the only thing that can change the answer. An agent that rewrites a
+   * note's lines in place leaves the note itself untouched — same file, same line numbers,
+   * different code — so no store event is raised and nothing here reconsidered: the widget sat
+   * on lines it was no longer about for as long as the file stayed open. The signal for that
+   * arrives from the index instead, and this is what it calls.
+   *
+   * Both directions: a thread whose note has stopped qualifying goes, and one that qualifies
+   * again — an edit undone, the lines back as they were — is put back.
+   */
+  sync(): void {
+    for (const [id] of [...this.threadsByNoteId]) {
+      if (this.isBeingEdited(id)) continue;
+      const note = this.store.getById(id);
+      if (!note || note.anchor.orphaned || !showsInEditor(note, this.linesChanged(id))) {
+        this.disposeThread(id);
+      }
+    }
+    this.materialiseFor(vscode.window.visibleTextEditors);
+  }
+
+  /**
+   * Is a half-written edit open in this note's widget?
+   *
+   * The one thing that outranks "this note no longer belongs on these lines": disposing the
+   * thread takes the sentence being typed into it with it, and there is no way to get it back.
+   * `sync()` has always honoured that; the store event did not, so clicking Approve on the card
+   * — or the agent's rewrite landing — deleted the draft. It is reconsidered as soon as the
+   * edit is finished with: the save and cancel commands call `sync()`.
+   */
+  private isBeingEdited(noteId: string): boolean {
+    const thread = this.threadsByNoteId.get(noteId);
+    return !!thread?.comments.some((c) => c.mode === vscode.CommentMode.Editing);
+  }
+
 
   // ─── lookups ────────────────────────────────────────────────────────────
 
@@ -100,77 +162,9 @@ export class CommentHost implements vscode.Disposable {
     return out;
   }
 
-  /**
-   * Close the follow-up textarea (discarding its draft) without collapsing the widgets.
-   * Toggling `canReply` re-renders the reply area back to its collapsed state.
-   */
-  /**
-   * Notes whose follow-up box is open.
-   *
-   * Held here rather than read off the thread: every refresh rebuilds the thread's state from
-   * the note, so without somewhere to remember it the box would close on the next store change
-   * — which happens while you are typing in it.
-   */
-  private readonly replyOpen = new Set<string>();
-
-  /**
-   * Open the follow-up box on a note, ready to type in.
-   *
-   * Deliberately minimal. The first version called `refresh`, which reassigns
-   * `thread.comments` — and VS Code rebuilds the reply widget from that without disposing the
-   * old one, so a second "Follow-up…" bar appeared beside the first. It also re-opened the
-   * document, which can re-enter thread creation and produce a second widget for the same
-   * note. Neither is needed: the widget is already on screen, because its own toolbar was just
-   * clicked.
-   *
-   * `focusCommentOnCurrentLine` reveals the thread under the cursor with focus in the reply
-   * editor, which is what makes the box land ready to type rather than as a bar to click. It
-   * works on the cursor's line, so the cursor moves there first — but only within the editor
-   * that is already showing.
-   */
-  async openReply(noteId: string): Promise<boolean> {
-    const thread = this.threadsByNoteId.get(noteId);
-    if (!thread) return false;
-    this.replyOpen.add(noteId);
-    // Straight onto the thread: no comment rebuild, so nothing can be duplicated.
-    thread.canReply = true;
-    thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-    const editor = vscode.window.activeTextEditor;
-    if (editor?.document.uri.toString() === thread.uri.toString()) {
-      const at = thread.range?.start ?? new vscode.Position(0, 0);
-      editor.selection = new vscode.Selection(at, at);
-      try {
-        await vscode.commands.executeCommand('workbench.action.focusCommentOnCurrentLine');
-      } catch {
-        // The box is open either way; only the focus was best-effort.
-      }
-    }
-    return true;
-  }
-
-  isReplyOpen(noteId: string): boolean {
-    return this.replyOpen.has(noteId);
-  }
-
-  cancelReply(uri: vscode.Uri, only?: vscode.CommentThread): boolean {
-    // Just the thread the Cancel came from, when it is known. Falling back to every thread in
-    // the file would close a reply being written on a different note.
-    const threads = only
-      ? this.threadsForUri(uri).filter(({ thread }) => thread === only)
-      : this.threadsForUri(uri);
-    if (threads.length === 0) return false;
-    for (const { noteId, thread } of threads) {
-      thread.canReply = false;
-      this.replyOpen.delete(noteId);
-    }
-    setTimeout(() => {
-      for (const { noteId } of threads) this.refresh(noteId);
-    }, 0);
-    return true;
-  }
-
+  /** Which files take a note at all — asked by the commands, so the rule lives in one place. */
   get rangeProvider(): RangeProvider {
-    return this.controller.commentingRangeProvider as RangeProvider;
+    return this.commentingRange;
   }
 
   // ─── note lifecycle ─────────────────────────────────────────────────────
@@ -181,6 +175,7 @@ export class CommentHost implements vscode.Disposable {
    * Run `create` (which adds a note to the store) while `thread` is marked as the thread
    * that spawned it, so the store's `add` event adopts that thread instead of creating a
    * second one. Returns the created note.
+   *
    */
   createWithThread<T extends ReviewNote>(thread: vscode.CommentThread, create: () => T): T {
     void maybeOfferToQuietCommentsPanel(this.context);
@@ -197,15 +192,32 @@ export class CommentHost implements vscode.Disposable {
 
   /** Bind a freshly created note to the (previously empty) thread that spawned it. */
   adopt(thread: vscode.CommentThread, note: ReviewNote): void {
+    // Settled, orphaned or standing on rewritten lines before its widget was ever adopted — a
+    // re-imported note, or a report that landed between the two. Adopting it here is how a
+    // disposed widget came back once.
+    if (!showsInEditor(note, this.linesChanged(note.id))) {
+      try {
+        thread.dispose();
+      } catch {
+        /* already gone */
+      }
+      return;
+    }
     const previous = this.threadsByNoteId.get(note.id);
     if (previous && previous !== thread) this.disposeThread(note.id);
-    applyNoteToThread(thread, note, this.replyOpen.has(note.id));
+    applyNoteToThread(thread, note);
     thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
     this.register(note.id, thread);
   }
 
   /** Ensure a thread exists for the note (materialising if its file is open). */
   ensureThread(note: ReviewNote, uri?: vscode.Uri): vscode.CommentThread | undefined {
+    // A note that no longer belongs on these lines has no widget — and must not grow one back
+    // the next time its file is opened, or scrolled, or the note is touched by the tracker.
+    if (!showsInEditor(note, this.linesChanged(note.id))) {
+      this.disposeThread(note.id);
+      return undefined;
+    }
     const target = uri ?? uriForNote(note.path, note.workspaceFolder);
     if (!target) return undefined;
     const existing = this.threadsByNoteId.get(note.id);
@@ -217,7 +229,7 @@ export class CommentHost implements vscode.Disposable {
       // Note moved to another file (re-anchor): the old thread is stale.
       this.disposeThread(note.id);
     }
-    const thread = createThread(this.controller, target, note, this.replyOpen.has(note.id));
+    const thread = createThread(this.controller, target, note);
     this.register(note.id, thread);
     return thread;
   }
@@ -236,13 +248,12 @@ export class CommentHost implements vscode.Disposable {
       if (!thread.range || !thread.range.isEqual(r)) thread.range = r;
       return;
     }
-    applyNoteToThread(thread, note, this.replyOpen.has(noteId));
+    applyNoteToThread(thread, note);
   }
 
   disposeThread(noteId: string): void {
     const thread = this.threadsByNoteId.get(noteId);
     if (!thread) return;
-    this.replyOpen.delete(noteId);
     this.threadsByNoteId.delete(noteId);
     try {
       thread.dispose();
@@ -290,7 +301,7 @@ export class CommentHost implements vscode.Disposable {
       seen.add(key);
       for (const note of this.store.notes) {
         if (noteKey(note.path, note.workspaceFolder) !== key) continue;
-        if (note.anchor.orphaned) continue;
+        if (note.anchor.orphaned || !showsInEditor(note, this.linesChanged(note.id))) continue;
         if (!this.threadsByNoteId.has(note.id)) this.ensureThread(note, loc.fileUri);
       }
     }
@@ -316,7 +327,10 @@ export class CommentHost implements vscode.Disposable {
         for (const id of e.noteIds) {
           const note = this.store.getById(id);
           if (!note) continue;
-          if (note.anchor.orphaned) {
+          // The same rule `sync()` follows, and for the same reason — see `isBeingEdited`.
+          // `refresh` below already knows to leave a draft alone and sync only the range.
+          const editing = this.isBeingEdited(id);
+          if (!editing && (note.anchor.orphaned || !showsInEditor(note, this.linesChanged(note.id)))) {
             this.disposeThread(id);
           } else if (this.threadsByNoteId.has(id)) {
             this.refresh(id);
@@ -340,6 +354,7 @@ export class CommentHost implements vscode.Disposable {
   }
 
   private materialiseIfVisible(note: ReviewNote): void {
+    if (!showsInEditor(note, this.linesChanged(note.id))) return;
     const key = noteKey(note.path, note.workspaceFolder);
     for (const ed of vscode.window.visibleTextEditors) {
       const loc = locationForUri(ed.document.uri);

@@ -1,3 +1,9 @@
+> **Superseded — kept for history.** This is part of the original build handoff that Redline
+> was written from, when it was called Local Review. It names `localReview.*` commands, settings
+> that were never built, and a panel implemented as a tree view rather than a webview. It is not
+> a contract with anything. For how Redline works now, read [`docs/`](../docs/); for what it does,
+> read [the README](../README.md).
+
 # package.json contributions
 
 This is the contract between the UI and the code. Implement it as written; the `when`
