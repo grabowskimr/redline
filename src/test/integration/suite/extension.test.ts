@@ -1,7 +1,10 @@
 import * as assert from 'node:assert/strict';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import * as fs from 'node:fs/promises';
 import { readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import * as vscode from 'vscode';
 import { projectSlug } from '../../../claude/transcripts';
 
@@ -119,6 +122,32 @@ describe('Redline (integration)', function () {
   let staged: ReadonlyArray<readonly [string, string | undefined]> = [];
   let api: Api;
 
+  /**
+   * Give the fixture workspace a git repository of its own.
+   *
+   * It never had one, so every command here that asks "what changed" answered about the
+   * *Redline repository* instead — whose diff is whatever this session happens to have
+   * uncommitted. That is why `reviews changes and walks them without throwing` passed at 572ms
+   * on a clean tree, timed out at twenty seconds with a release's worth of work in flight, and
+   * looked for all the world like a flaky test. It was measuring the wrong repository.
+   *
+   * Three files and one commit: fast, deterministic, and unaffected by anything happening in
+   * the repository that contains it.
+   */
+  const giveTheFixtureItsOwnRepo = async (root: string): Promise<void> => {
+    const git = (...args: string[]): Promise<unknown> =>
+      promisify(execFile)('git', args, {
+        cwd: root,
+        env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+      });
+    if (await fs.stat(path.join(root, '.git')).then(() => true, () => false)) return;
+    await git('init', '-q', '-b', 'main');
+    await git('config', 'user.email', 'fixture@example.com');
+    await git('config', 'user.name', 'Fixture');
+    await git('add', '-A');
+    await git('commit', '-qm', 'the fixture, as the tests expect to find it');
+  };
+
   before(async () => {
     const ext = vscode.extensions.getExtension(EXT_ID);
     assert.ok(ext, 'extension present');
@@ -127,6 +156,7 @@ describe('Redline (integration)', function () {
     const folder = vscode.workspace.workspaceFolders?.[0];
     assert.ok(folder, 'workspace folder open');
     sampleUri = vscode.Uri.file(path.join(folder.uri.fsPath, 'src', 'sample.ts'));
+    await giveTheFixtureItsOwnRepo(folder.uri.fsPath);
     await vscode.workspace
       .getConfiguration('redline')
       .update('confirmOnSubmit', false, vscode.ConfigurationTarget.Workspace);

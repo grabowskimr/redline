@@ -36,9 +36,34 @@ export function projectSlug(cwd: string): string {
  *
  * With no folders to compare against, everything matches: better noisy than deaf.
  */
-export function slugInScope(slug: string, roots: readonly string[]): boolean {
+export type SlugScope =
+  /** This directory, anything under it, and anything it sits under. */
+  | 'related'
+  /** This directory and the directories it sits under — nothing deeper. */
+  | 'self-or-above';
+
+/**
+ * `'self-or-above'` exists because a deeper slug is ambiguous in a way the others are not.
+ *
+ * `/repo/frontend` and `/repo-frontend` produce the same string, so "starts with ours" cannot
+ * tell a directory inside the workspace from a sibling whose name merely begins the same way.
+ * That is tolerable for "did something here change" — both are worth a look — and wrong for
+ * "is the agent this window is watching busy": the hook keys its markers by *repository* root,
+ * so a deeper slug is always another repository, and letting its run end clear ours flipped
+ * this window to idle in the middle of a turn.
+ */
+export function slugInScope(
+  slug: string,
+  roots: readonly string[],
+  scope: SlugScope = 'related',
+): boolean {
   if (roots.length === 0) return true;
-  return roots.some((r) => slug === r || slug.startsWith(`${r}-`) || r.startsWith(`${slug}-`));
+  return roots.some(
+    (r) =>
+      slug === r ||
+      r.startsWith(`${slug}-`) ||
+      (scope === 'related' && slug.startsWith(`${r}-`)),
+  );
 }
 
 function projectsDir(): string {

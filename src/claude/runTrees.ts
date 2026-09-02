@@ -27,6 +27,16 @@ export interface RunTree {
 export interface RunTrees {
   before?: RunTree;
   after?: RunTree;
+  /**
+   * The request currently in flight, and the tree it started from.
+   *
+   * Not a boundary. Hook 2 and later stop moving `before` at every request and move it at the
+   * first change instead, so a turn that only talks leaves the last run that *did* change
+   * something on screen. This marker is what says the hook saw the request at all — which is
+   * how `before` being older than the request under review is told apart from a hook that has
+   * stopped writing. Absent from hook 1, and while nothing is running.
+   */
+  pending?: RunTree;
   /** Finished runs, newest first, kept so they can still be looked at. */
   history?: PastRun[];
 }
@@ -35,6 +45,13 @@ export interface RunTrees {
 export interface PastRun extends RunTree {
   /** The tree the run left behind. */
   after: string;
+  /**
+   * The end is the tree at the *next* request, not one taken when this run stopped.
+   *
+   * Claude Code does not run the `Stop` hook on an interrupt, so an interrupted run has no end
+   * of its own. This is the closest honest one, and it can carry edits made in between.
+   */
+  approx?: boolean;
 }
 
 /**
@@ -120,6 +137,11 @@ export async function readRunTrees(root: string, home?: string): Promise<RunTree
     trees.before = { at: before.at, tree: before.tree };
     if (typeof (before as RunTree).session === 'string') trees.before.session = (before as RunTree).session;
   }
+  const pending = started?.pending;
+  if (isTree(pending)) {
+    trees.pending = { at: pending.at, tree: pending.tree };
+    if (typeof (pending as RunTree).session === 'string') trees.pending.session = (pending as RunTree).session;
+  }
   // The stop marker names a tree only from the version of the hook that records one, and only
   // for a run that has actually ended.
   if (stopped && typeof stopped.tree === 'string' && typeof stopped.at === 'string') {
@@ -132,15 +154,17 @@ export async function readRunTrees(root: string, home?: string): Promise<RunTree
     const history: PastRun[] = [];
     for (const raw of past) {
       const e = raw as Partial<PastRun>;
-      // Read before the guard: narrowing to `RunTree` drops the field this one adds.
+      // Read before the guard: narrowing to `RunTree` drops the fields this one adds.
       const after = e.after;
+      const approx = e.approx === true;
       if (!isTree(e) || typeof after !== 'string' || !/^[0-9a-f]{40,64}$/.test(after)) continue;
       const run: PastRun = { at: e.at, tree: e.tree, after };
       if (typeof e.session === 'string') run.session = e.session;
+      if (approx) run.approx = true;
       history.push(run);
     }
     if (history.length > 0) trees.history = history;
   }
-  if (!trees.before && !trees.after && !trees.history) return undefined;
+  if (!trees.before && !trees.after && !trees.history && !trees.pending) return undefined;
   return trees;
 }

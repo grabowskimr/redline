@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { projectSlug } from '../../claude/transcripts';
 import { touchedSince } from '../../claude/touched';
 import { readRunTrees } from '../../claude/runTrees';
+import { treeChanges } from '../../git/snapshotTree';
 
 const run = promisify(execFile);
 
@@ -75,12 +76,195 @@ describe('the hook Claude Code runs', () => {
     await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'fix the thing' });
 
     const trees = await readRunTrees(repo, home);
-    assert.ok(trees?.before, 'a before tree was recorded');
-    assert.match(trees.before.tree, /^[0-9a-f]{40,64}$/, 'a real git object id');
+    assert.ok(trees?.pending, 'the tree this request starts from was recorded');
+    assert.match(trees.pending.tree, /^[0-9a-f]{40,64}$/, 'a real git object id');
 
     // And it is a tree this repository actually has.
-    const { stdout } = await git('cat-file', '-t', trees.before.tree);
+    const { stdout } = await git('cat-file', '-t', trees.pending.tree);
     assert.equal(stdout.trim(), 'tree');
+  });
+
+  it('does not make it the run boundary until the run changes something', async () => {
+    /*
+     * The bug this exists for. `before` used to be overwritten at every request, so "the last
+     * run" meant "the most recent request" rather than "the most recent request that changed
+     * anything". Every turn that only talked — a question, an answer read, a note approved —
+     * snapshotted the tree as it already stood and made that the boundary, so `before` and the
+     * end of the run were the same tree, the diff was empty, and the previous run's work
+     * vanished from the gutter and from *Claude's last run* while it sat uncommitted.
+     */
+    await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'change it' });
+    await write('src/a.ts', 'export const a = 2;\n');
+    await hook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(repo, 'src/a.ts') },
+    });
+    await hook({ hook_event_name: 'Stop' });
+
+    const worked = await readRunTrees(repo, home);
+    const boundary = worked?.before?.tree;
+    assert.ok(boundary, 'the run that changed something set the boundary');
+    assert.notEqual(worked?.after?.tree, boundary, 'and its diff is not empty');
+
+    // Now talk to it twice without it editing anything at all.
+    for (const prompt of ['why did you do that?', 'ok, thanks']) {
+      await hook({ hook_event_name: 'UserPromptSubmit', prompt });
+      await hook({ hook_event_name: 'Stop' });
+    }
+
+    const after = await readRunTrees(repo, home);
+    assert.equal(after?.before?.tree, boundary, 'the boundary has not moved');
+    assert.notEqual(after?.after?.tree, after?.before?.tree, 'so the last run still has changes to show');
+    assert.equal(after?.pending, undefined, 'and no request is left marked in flight');
+  });
+
+  it('keeps the boundary when the run only writes outside the repository', async () => {
+    // What happened in the field: the turn's only writes went to `~/.claude/…` memory files.
+    // Logging those is right; moving the run boundary for them is not — nothing in the
+    // repository changed, so the previous run is still the last one worth showing.
+    await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'change it' });
+    await write('src/a.ts', 'export const a = 2;\n');
+    await hook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(repo, 'src/a.ts') },
+    });
+    await hook({ hook_event_name: 'Stop' });
+    const boundary = (await readRunTrees(repo, home))?.before?.tree;
+
+    const outside = path.join(home, 'notes.md');
+    await fs.writeFile(outside, 'remembered\n', 'utf8');
+    await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'remember that' });
+    await hook({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: outside } });
+    await hook({ hook_event_name: 'Stop' });
+
+    assert.equal((await readRunTrees(repo, home))?.before?.tree, boundary, 'the boundary has not moved');
+  });
+
+  it('gives an interrupted run an end, so it can still be looked at', async () => {
+    /*
+     * Claude Code does not run the `Stop` hook when a turn is interrupted, so an interrupted
+     * run records no end. It used to be archived with `after: undefined`, which the reader
+     * drops — putting a run whose work was real and on screen a moment ago permanently out of
+     * reach of *Review a Previous Run*.
+     */
+    await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'first' });
+    await write('src/a.ts', 'export const a = 2;\n');
+    await hook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(repo, 'src/a.ts') },
+    });
+    // Interrupted here: no Stop.
+
+    await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'second' });
+    await write('src/b.ts', 'export const b = 1;\n');
+    await hook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(repo, 'src/b.ts') },
+    });
+    await hook({ hook_event_name: 'Stop' });
+
+    const trees = await readRunTrees(repo, home);
+    const past = trees?.history?.[0];
+    assert.ok(past, 'the interrupted run is still reachable');
+    assert.match(past.after, /^[0-9a-f]{40,64}$/, 'with both of its ends');
+    assert.equal(past.approx, true, 'marked, because the end is the next request rather than its own');
+  });
+
+  it('puts the boundary back when a run only edits files git ignores', async () => {
+    // The boundary moves on the first edit, which keeps the panel live while the agent works.
+    // An edit that leaves the tree untouched — a gitignored file, or one undone before the run
+    // ended — has to give it back, or a run that changed nothing hides the last one that did.
+    await write('.gitignore', 'secrets/\n');
+    await git('add', '-A');
+    await git('commit', '-qm', 'ignore');
+
+    await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'change it' });
+    await write('src/a.ts', 'export const a = 2;\n');
+    await hook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(repo, 'src/a.ts') },
+    });
+    await hook({ hook_event_name: 'Stop' });
+    const boundary = (await readRunTrees(repo, home))?.before?.tree;
+
+    await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'write the env file' });
+    await write('secrets/.env', 'TOKEN=1\n');
+    await hook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: path.join(repo, 'secrets/.env') },
+    });
+    await hook({ hook_event_name: 'Stop' });
+
+    const trees = await readRunTrees(repo, home);
+    assert.equal(trees?.before?.tree, boundary, 'the boundary is back where it was');
+    assert.notEqual(trees?.after?.tree, trees?.before?.tree, 'and the last real run still shows its work');
+  });
+
+  it('still shows the last run that worked, after a conversation about it', async () => {
+    /*
+     * The whole failure, end to end, as it happened: a run edits three files; you ask about
+     * them; you read the answer and say thanks. Two turns, no edits. The panel went empty and
+     * the gutter marks disappeared, with the three files still uncommitted in the tree.
+     *
+     * Asserted on the file list *Last run* renders — `treeChanges` over the pair the extension
+     * reads back — rather than on the markers, so the two halves are checked against each
+     * other rather than against a copy of one of them.
+     */
+    const git2: (args: string[]) => Promise<string> = async (args) => (await git(...args)).stdout;
+
+    await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'rename the hook and its callers' });
+    for (const [file, text] of [
+      ['src/a.ts', 'export const a = 2;\n'],
+      ['src/b.ts', 'export const b = 1;\n'],
+    ] as const) {
+      await write(file, text);
+      await hook({
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(repo, file) },
+      });
+    }
+    await hook({ hook_event_name: 'Stop' });
+
+    const worked = await readRunTrees(repo, home);
+    assert.deepEqual(
+      [...(await treeChanges(worked!.before!.tree, worked!.after!.tree, git2)).keys()].sort(),
+      ['src/a.ts', 'src/b.ts'],
+      'the run that worked shows its two files',
+    );
+
+    for (const prompt of ['why did you rename it?', 'makes sense, thanks']) {
+      await hook({ hook_event_name: 'UserPromptSubmit', prompt });
+      await hook({ hook_event_name: 'Stop' });
+    }
+
+    const afterTalking = await readRunTrees(repo, home);
+    assert.deepEqual(
+      [...(await treeChanges(afterTalking!.before!.tree, afterTalking!.after!.tree, git2)).keys()].sort(),
+      ['src/a.ts', 'src/b.ts'],
+      'and still shows them after two turns of conversation',
+    );
+  });
+
+  it('catches a run whose only change was a file a shell command created', async () => {
+    // `bashEnd` diffs tracked files, so a file Bash *creates* names nothing and fires no edit
+    // signal. The end-of-run tree is what catches it — without this the run would be settled
+    // as a no-op and its new file attributed to whatever came next.
+    await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'generate it' });
+    await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash' });
+    await write('src/generated.ts', 'export const g = 1;\n');
+    await hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    await hook({ hook_event_name: 'Stop' });
+
+    const trees = await readRunTrees(repo, home);
+    assert.ok(trees?.before, 'the run took the boundary');
+    assert.notEqual(trees?.after?.tree, trees?.before?.tree, 'and the created file is in its diff');
   });
 
   it('leaves the index and the working tree exactly as it found them', async () => {

@@ -15,6 +15,12 @@ export class StatusBar implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem;
   private changedFiles = 0;
   private rangeLabel = '';
+  /**
+   * git could not list the changed files. Held separately from the count because the count is
+   * zero in that case too, and a bare `0` here read as a clean tree — the same lie the panel
+   * was already careful not to tell.
+   */
+  private changesUnknown = false;
 
   private readonly sub: vscode.Disposable;
 
@@ -50,7 +56,8 @@ export class StatusBar implements vscode.Disposable {
     const addressed = sent.filter((n) => n.sent?.outcome || this.index.changedSinceSent(n.id)).length;
 
     const parts = [`$(comment-discussion) ${open}`];
-    if (this.changedFiles > 0) parts.push(`$(git-compare) ${this.changedFiles}`);
+    if (this.changesUnknown) parts.push('$(git-compare) ?');
+    else if (this.changedFiles > 0) parts.push(`$(git-compare) ${this.changedFiles}`);
     if (sent.length) parts.push(`$(send) ${addressed}/${sent.length}`);
     if (this.working) parts.push('$(loading~spin)');
     this.item.text = parts.join('  ');
@@ -59,7 +66,9 @@ export class StatusBar implements vscode.Disposable {
     const lines: string[] = [
       open ? `**${open}** open note${open === 1 ? '' : 's'} — click to send to Claude Code` : 'No open notes — click to open the panel',
     ];
-    if (this.changedFiles > 0) {
+    if (this.changesUnknown) {
+      lines.push('Changed files **unavailable** — git could not list them. "Redline: Show Log" says why.');
+    } else if (this.changedFiles > 0) {
       lines.push(`**${this.changedFiles}** changed file${this.changedFiles === 1 ? '' : 's'} ${this.rangeLabel} — "Review Latest Changes" opens the diff`);
     }
     if (sent.length) lines.push(`${sent.length} sent, ${addressed} addressed`);
@@ -94,9 +103,11 @@ export class StatusBar implements vscode.Disposable {
       const s = await this.range.summary();
       const files = s?.recentCount ?? 0;
       const label = s?.recentLabel ?? '';
-      if (files !== this.changedFiles || label !== this.rangeLabel) {
+      const unknown = s?.unavailable === true;
+      if (files !== this.changedFiles || label !== this.rangeLabel || unknown !== this.changesUnknown) {
         this.changedFiles = files;
         this.rangeLabel = label;
+        this.changesUnknown = unknown;
         this.update();
       }
     } catch {

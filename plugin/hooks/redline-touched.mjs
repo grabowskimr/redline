@@ -117,6 +117,9 @@ async function sweepMarkers(dir) {
   }
 }
 
+/** Whether a path lies inside the repository this run is being measured against. */
+const insideRepo = (root, file) => file === root || file.startsWith(root.endsWith('/') ? root : `${root}/`);
+
 async function record(root, sessionId, files, via) {
   const unique = [...new Set(files.filter((f) => typeof f === 'string' && f))];
   if (unique.length === 0) return;
@@ -126,6 +129,11 @@ async function record(root, sessionId, files, via) {
   const lines = unique.map((f) => JSON.stringify({ at, session: sessionId, file: f, via })).join('\n');
   const logFile = join(dir, 'touched.jsonl');
   await appendFile(logFile, lines + '\n', 'utf8');
+  // The first edit inside the repository is what makes this run "the last run" — see
+  // `promoteRun`. Files outside it are logged but must not move the boundary: a turn whose
+  // only writes went to `~/.claude/`, a scratch directory or another repository changed
+  // nothing here, and moving the boundary for it is what made the previous run's work vanish.
+  if (unique.some((f) => insideRepo(root, f))) await promoteRun(dir, sessionId);
 }
 
 const markerFile = (root, sessionId) => join(logDir(root), `bash-${(sessionId || 'x').replace(/[^\w-]/g, '')}.start`);
@@ -297,56 +305,163 @@ const QUICK_TIMEOUT_MS = 5_000;
 /** How many finished runs stay reachable. */
 const MAX_RUN_HISTORY = 5;
 
+/** `runs.json` as it stands, or an empty shape. Small, and read on the critical path. */
+async function readRuns(dir) {
+  try {
+    const raw = JSON.parse(await readFile(join(dir, 'runs.json'), 'utf8'));
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return {}; // no previous run here, or a half-written file
+  }
+}
+
 /**
- * Record the tree the run starts from.
+ * Publish `runs.json`.
  *
- * Its own file, written only at submit: Redline watches for it to know the run boundary has
- * moved. The end-of-run tree rides along with the stop marker instead, so neither event can
- * ever be mistaken for the other.
+ * Renamed into place: Redline could otherwise read a half-written file and see no run at all.
+ * That holds for one writer; two need the pid as well, or they tear each other's temp file
+ * and the rename publishes the tear. Two Claude sessions submitting a prompt in the same
+ * repository at the same moment interleave their JSON into a shared `runs.json.tmp`, and
+ * Redline's reader swallows the parse error — both windows then quietly drop to the mtime
+ * heuristic with nothing to say why.
+ */
+async function writeRuns(dir, runs) {
+  const file = join(dir, 'runs.json');
+  const temp = `${file}.${process.pid}.tmp`;
+  // Stamped so Redline can tell a settled run from hook 1, which never wrote `pending` at all.
+  // Both look like "a marker with `before` and no `pending`", and they mean opposite things:
+  // under hook 1 that is a request starting, under hook 2 it is a run that has just ended.
+  await writeFile(temp, JSON.stringify({ ...runs, version: 2 }), 'utf8');
+  await rename(temp, file);
+}
+
+/**
+ * Record the tree this request starts from — as a *candidate* boundary, not the boundary.
+ *
+ * This used to overwrite `before` outright, which made "the last run" mean "the most recent
+ * request" rather than "the most recent request that changed anything". Those differ every
+ * time you talk to the agent without it editing: asking a question, reading its answer,
+ * approving a note, or a turn whose only writes went outside the repository. Each such turn
+ * snapshotted the tree as it already stood and made that the boundary, so `before` and `after`
+ * became the same tree, the diff was empty, and everything the previous run had done
+ * disappeared from the gutter and from *Claude's last run* — with the changes still sitting
+ * uncommitted in the working tree.
+ *
+ * So the boundary is not moved here. It is moved by `promoteRun` at the moment this run first
+ * changes something, and a run that never does leaves the previous one's boundary standing.
+ * The session is recorded so the two ends of a run can be checked against each other: two
+ * sessions working in one repository overwrite each other's marker, and a "before" from a
+ * different session than the one that stopped describes a different run.
  */
 async function recordRunStart(root, sessionId) {
   const tree = await snapshotTree(root);
   if (!tree) return;
   const dir = logDir(root);
   await mkdir(dir, { recursive: true });
-  const file = join(dir, 'runs.json');
-  const temp = `${file}.tmp`;
+  const runs = await readRuns(dir);
+  // A pending marker left by a run that never reached `Stop` is simply replaced: whatever it
+  // would have promoted, this snapshot already contains.
+  runs.pending = { at: new Date().toISOString(), tree, session: sessionId || '' };
+  await writeRuns(dir, runs);
+}
 
-  // The run that is ending keeps its pair, so it can still be looked at after the next one
-  // starts. Without this, submitting a follow-up puts the previous run permanently out of
-  // reach — the trees are still in the object store, but nothing remembers which they were.
-  let history = [];
-  try {
-    const prev = JSON.parse(await readFile(file, 'utf8'));
-    if (prev?.before?.tree) {
-      let after;
-      try {
-        const stopped = JSON.parse(await readFile(join(dir, 'stopped.json'), 'utf8'));
-        // Only if it belongs to the run that is ending, not to an older one.
-        if (stopped?.tree && Date.parse(stopped.at) >= Date.parse(prev.before.at)) after = stopped.tree;
-      } catch {
-        // never stopped, or a hook too old to record it
-      }
-      history = [{ ...prev.before, after }, ...(Array.isArray(prev.history) ? prev.history : [])];
+/**
+ * This run has changed something, so it becomes the run Redline shows.
+ *
+ * Called from the first edit inside the repository, not from `Stop`, so the panel narrows to
+ * the new run while the agent is still working — which is what makes a card answer within a
+ * second or two of the edit rather than at the end of the turn.
+ *
+ * Cheap after the first call: the pending marker is left in place and flagged, so every
+ * subsequent edit in the same run costs one small read and stops.
+ */
+async function promoteRun(dir, sessionId) {
+  const runs = await readRuns(dir);
+  const pending = runs.pending;
+  if (!pending || typeof pending.tree !== 'string' || pending.promoted) return;
+  /*
+   * Only this session's own request. Two sessions in one worktree overwrite each other's
+   * marker, so the pending tree here can be the *other* one's — taken after this run had
+   * already started editing. Promoting to it would make this run's earlier edits part of the
+   * boundary and hide them completely. Leaving the older boundary standing shows them along
+   * with more besides, which is the side to err on.
+   */
+  if (sessionId && pending.session && pending.session !== sessionId) return;
+  const prev = runs.before;
+  if (prev?.tree && prev.tree !== pending.tree) {
+    // The run that owned the old boundary keeps its pair, so it can still be looked at after
+    // this one takes over. Without this, a follow-up puts the previous run permanently out of
+    // reach — the trees are still in the object store, but nothing remembers which they were.
+    let after;
+    try {
+      const stopped = JSON.parse(await readFile(join(dir, 'stopped.json'), 'utf8'));
+      // Only if it belongs to the run that is ending, not to an older one.
+      if (stopped?.tree && Date.parse(stopped.at) >= Date.parse(prev.at)) after = stopped.tree;
+    } catch {
+      // never stopped, or a hook too old to record it
     }
-  } catch {
-    // no previous run here
+    const entry = { ...prev, after };
+    if (!after) {
+      /*
+       * Claude Code does not run the `Stop` hook when you interrupt a turn, so an interrupted
+       * run never records an end and used to be archived with `after: undefined` — which
+       * Redline's reader drops, putting a run whose work was real and reviewable a moment ago
+       * permanently out of reach of *Review a Previous Run*.
+       *
+       * The tree this run starts from is the closest honest end for it. It can also carry
+       * edits made in between, so it is marked rather than passed off as exact.
+       */
+      entry.after = pending.tree;
+      entry.approx = true;
+    }
+    // A handful is enough to answer "what did the run before this one do?"; keeping more
+    // would pin objects in the repository indefinitely for no one.
+    runs.history = [entry, ...(Array.isArray(runs.history) ? runs.history : [])].slice(0, MAX_RUN_HISTORY);
   }
-  // Renamed into place: Redline could otherwise read a half-written file and see no run at all.
-  // The session is recorded so the two ends of a run can be checked against each other: two
-  // sessions working in one repository overwrite each other's marker, and a "before" from a
-  // different session than the one that stopped describes a different run.
-  await writeFile(
-    temp,
-    JSON.stringify({
-      before: { at: new Date().toISOString(), tree, session: sessionId || '' },
-      // A handful is enough to answer "what did the run before this one do?"; keeping more
-      // would pin objects in the repository indefinitely for no one.
-      history: history.slice(0, MAX_RUN_HISTORY),
-    }),
-    'utf8',
-  );
-  await rename(temp, file);
+  runs.before = { at: pending.at, tree: pending.tree, session: pending.session };
+  runs.pending = { ...pending, promoted: true };
+  await writeRuns(dir, runs);
+}
+
+/**
+ * Settle the pending marker now the run is over.
+ *
+ * Three ways a run ends, and each needs a different answer:
+ *
+ * - **It changed something, and said so.** Already promoted from `record`; nothing to do
+ *   beyond clearing the marker.
+ * - **It changed something no tool call named.** A `Bash` command that *creates* a file is
+ *   invisible to `bashEnd`, which diffs tracked files only. The end-of-run tree catches it.
+ * - **It changed nothing.** A conversation, a question, a turn that only read — or one whose
+ *   edits all landed on gitignored files, or were undone before it finished. The boundary
+ *   stays where it was, so the previous run's work is still on screen.
+ */
+async function settleRun(dir, endTree, sessionId) {
+  const runs = await readRuns(dir);
+  const pending = runs.pending;
+  if (!pending) return;
+  if (!pending.promoted) {
+    if (endTree && endTree !== pending.tree) {
+      await promoteRun(dir, sessionId);
+      const settled = await readRuns(dir);
+      delete settled.pending;
+      await writeRuns(dir, settled);
+      return;
+    }
+    delete runs.pending;
+    await writeRuns(dir, runs);
+    return;
+  }
+  // Promoted, but the tree never actually moved: the edits went to gitignored files, or were
+  // reverted before the run ended. Put the boundary back where promotion found it, or this
+  // run — which changed nothing — would hide the last run that did.
+  if (endTree && runs.before?.tree === endTree && Array.isArray(runs.history) && runs.history[0]) {
+    const [restored, ...rest] = runs.history;
+    runs.before = { at: restored.at, tree: restored.tree, session: restored.session };
+    runs.history = rest;
+  }
+  delete runs.pending;
+  await writeRuns(dir, runs);
 }
 
 /**
@@ -401,7 +516,10 @@ async function markAlive(root) {
   const temp = `${file}.${process.pid}.tmp`;
   await writeFile(
     temp,
-    JSON.stringify({ name: 'redline', version: 1, token: DELIVERY_TOKEN, at: new Date().toISOString() }),
+    // Version 2 defers the run boundary until a run actually changes something, so `before`
+    // is legitimately older than the request Redline is looking at. Redline checks this before
+    // relaxing its own staleness guard, or an old hook's stale snapshot would be trusted.
+    JSON.stringify({ name: 'redline', version: 2, token: DELIVERY_TOKEN, at: new Date().toISOString() }),
     'utf8',
   );
   await rename(temp, file);
@@ -420,6 +538,11 @@ async function runEnded(root, sessionId) {
   // Snapshotted before the marker is written, so that by the time Redline reacts to the marker
   // the exact result of the run is already on disk and the panel has nothing left to compute.
   const tree = await snapshotTree(root);
+  // Before the stop marker: by the time Redline reacts to the marker, the boundary this run
+  // leaves behind has to be the one it will read. Settling after would publish "a run ended"
+  // while `runs.json` still described the run as pending, and the panel would render once
+  // against the wrong boundary before correcting itself.
+  await settleRun(dir, tree, sessionId);
   // Renamed into place, like `runs.json` and the outbox. Redline's `HookSignals` fires on the
   // create event and parses this file straight away, so a plain write is read torn: the parse
   // fails, the extension takes its "hook too old to record a tree" branch and guesses the

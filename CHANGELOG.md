@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.8.0 — 2026-09-02
+
+The run boundary moves when work lands, not when you press Enter.
+
+- **A conversation no longer empties *Claude's last run*.** The hook overwrote the run boundary
+  at every `UserPromptSubmit`, so "the last run" meant "the most recent request" rather than
+  "the most recent request that changed anything". Every turn that only talked — asking what it
+  did, reading the answer, approving a note, or a turn whose only writes went outside the
+  repository — snapshotted the tree as it already stood and made *that* the boundary. Before and
+  after were then the same tree, the diff was empty, and the run's work disappeared from the
+  gutter and from the Source Control view while it sat uncommitted in the tree. The boundary is
+  now a candidate at submit and takes over at the run's first write inside the repository; a run
+  that never writes leaves the previous boundary standing.
+- **Writes outside the repository do not count as the run's work.** They are still logged, but a
+  turn that only wrote to `~/.claude/` or a scratch directory changed nothing here.
+- **A run that only touched gitignored files gives the boundary back.** Promotion happens on the
+  first edit, which keeps the panel live while the agent works; if the tree turns out not to have
+  moved by `Stop` — a gitignored file, or an edit undone before the run ended — the boundary is
+  restored rather than left on a run with an empty diff.
+- **An interrupted run can still be looked at.** Claude Code does not run the `Stop` hook on an
+  interrupt, so such a run recorded no end and was archived with none — which the reader drops,
+  putting a run whose work was on screen a moment ago out of reach of *Review a Previous Run*.
+  It is now closed with the tree at the next request, and marked as approximate.
+- **A file a shell command created still counts.** `bashEnd` diffs tracked files, so a created
+  file names nothing and fires no edit signal; the end-of-run tree now catches it.
+- Redline no longer reads the `runs.json` write at `Stop` as a run *starting*. The file is
+  written three times a run now, and treating the last of those as a start left the panel
+  claiming the agent was busy — holding the send queue — whenever the watcher delivered it after
+  `stopped.json`.
+- The staleness guard that rejects a snapshot older than the request under review now asks
+  whether the hook is keeping up, not whether the boundary is recent. Those were the same
+  question only while the boundary moved every turn; under the new rule an older boundary is the
+  mechanism working, and rejecting it dropped the panel to file times after a minute of talking.
+- History fills with runs that did something, rather than one entry per prompt.
+
+
 ## 1.7.0 — 2026-08-31
 
 Fixes to the note widget and the panel.

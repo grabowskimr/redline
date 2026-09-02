@@ -611,6 +611,24 @@
   var activity = null;
 
   /**
+   * When the session last gave a sign of life, and how long it can go without one.
+   *
+   * A lost `Stop` signal — a crashed agent, a killed terminal, a hook that never ran — leaves
+   * the strip saying "Claude is working…" for half an hour, with queued notes waiting on a
+   * finish that is never coming and nothing on screen to suggest the signal was lost. Quiet is
+   * only ever a suspicion (a long `Bash` looks the same), so this softens what the strip
+   * claims rather than deciding anything.
+   */
+  var STALE_RUN_MS = 5 * 60 * 1000;
+  var lastHeardFrom = 0;
+
+  function runLooksLost() {
+    var s = state.session;
+    if (!s || s.state !== 'working') return false;
+    return lastHeardFrom > 0 && Date.now() - lastHeardFrom > STALE_RUN_MS;
+  }
+
+  /**
    * A line under the session strip while a run is going.
    *
    * A silent minute and a hung one look the same otherwise — and the session's own terminal,
@@ -629,14 +647,24 @@
   function sessionStrip() {
     const s = state.session;
     if (!s) return '';
-    const stateText =
-      s.state === 'working' ? 'Claude is working…' : s.state === 'idle' ? 'watching' : 'not watched';
+    const lost = runLooksLost();
+    const stateText = lost
+      ? 'Claude may no longer be running'
+      : s.state === 'working'
+        ? 'Claude is working…'
+        : s.state === 'idle'
+          ? 'watching'
+          : 'not watched';
     const who = s.label ? esc(s.label) : 'No Claude Code session detected';
     const hasRecent = typeof s.changedFiles === 'number' && s.changedFiles > 0;
     // Held until the agent is free. Nothing else says so once the status-bar message is gone,
     // and the notes look simply unsent.
+    const queuedTitle = lost
+      ? 'Claude has not reported for a while. These still go when it finishes — to send one now, ' +
+        'use Send on the card itself.'
+      : 'They go the moment Claude finishes';
     const queued = s.queued
-      ? '<span class="queued" title="They go the moment Claude finishes">' +
+      ? '<span class="queued" title="' + esc(queuedTitle) + '">' +
         icon('clock') +
         ' ' +
         s.queued +
@@ -1506,13 +1534,23 @@
       scheduleRender();
     } else if (msg.type === 'activity') {
       activity = msg.activity || null;
+      // The hook only reports activity when the agent touches something, so any of these is
+      // proof the run is alive.
+      lastHeardFrom = Date.now();
       scheduleRender();
     } else if (msg.type === 'idle') {
       // The extension finished whatever the last click started.
       clearBusy();
     } else if (msg.type === 'session') {
       clearBusy();
+      // Only the moment it *becomes* busy counts as a sign of life: the strip is posted again
+      // every half minute whatever the agent is doing, so treating each post as news would
+      // mean a dead run never looked quiet.
+      const wasWorking = state.session && state.session.state === 'working';
       state.session = msg.session || null;
+      const working = state.session && state.session.state === 'working';
+      if (!working) lastHeardFrom = 0;
+      else if (!wasWorking) lastHeardFrom = Date.now();
       if (ready) scheduleRender();
     }
   });

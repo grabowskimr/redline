@@ -6,9 +6,10 @@ import { discardReport, readReport, takeReport } from '../claude/reportFile';
 import { pickTarget, readTarget, resolveTarget, sendBatchToClaude, SessionTarget, targetByKey } from '../claude/claudeSession';
 import { ClaudeSessionInfo, findSessions, latestSessionAmong, recentAssistantText } from '../claude/transcripts';
 import { readStopMarker } from '../claude/runTrees';
+import { changesToShow } from '../git/reviewRange';
 import { deliveryToken, stageForHandover } from '../claude/handover';
 import { Deps, resolveNoteIdOrPick } from './deps';
-import { SendQueue } from './sendQueue';
+import { queueToRestore, SendKind, SendQueue, shouldConfirm } from './sendQueue';
 import { serialiser } from './serialise';
 
 /**
@@ -76,21 +77,85 @@ export function batchCommands(deps: Deps) {
   /** How often to check whether the agent has gone quiet, while anything is waiting. */
   const QUIET_POLL_MS = 15_000;
 
+  /** Where the queue is written down, so closing the window does not break its promise. */
+  const QUEUE_KEY = 'redline.sendQueue';
+
+  /**
+   * Whatever remembers state across windows, when there is one.
+   *
+   * Guarded rather than assumed: this runs in tests and in hosts that hand over a slimmer
+   * context than the manifest promises, and a queue that cannot be written down is a smaller
+   * failure than an extension that will not activate.
+   */
+  const memory = (
+    deps.context as unknown as {
+      workspaceState?: { get<T>(key: string): T | undefined; update(key: string, value: unknown): Thenable<void> };
+    }
+  ).workspaceState;
+
   /** The panel draws a held card differently, so it has to be told the moment one is held. */
   let notifyQueue: () => void = () => undefined;
-  const queued = new SendQueue(() => notifyQueue());
+  const queued = new SendQueue(() => {
+    // Written on every change rather than on the way out: `deactivate` is not somewhere a
+    // window closing can be relied on to finish anything, least of all a dialog.
+    void memory?.update(QUEUE_KEY, queued.list());
+    notifyQueue();
+  });
+
+  /** A flush already in flight, so a second run ending does not send the same batch twice. */
+  let flushing: Promise<void> | undefined;
 
   /** Called when a run ends: send what was held, if anything. */
-  async function flushQueued(): Promise<void> {
-    const ids = queued.take((id) => !!store.getById(id));
+  function flushQueued(): Promise<void> {
+    // Two ends in quick succession — the hook and the poll, or two sessions stopping — both
+    // called this, and the second found a queue the first had already emptied but had not yet
+    // sent. Whoever got there first owns the batch.
+    if (flushing) return flushing;
+    flushing = flushNow().finally(() => {
+      flushing = undefined;
+    });
+    return flushing;
+  }
+
+  async function flushNow(): Promise<void> {
+    if (queued.size === 0) return;
+    // Another session in this repository may still be mid-turn: the markers are per repository
+    // root and this window hears every session's end, so "a run ended" is not "the agent is
+    // free". Leave the notes where they are and let the poll try again.
+    if (deps.signals?.running === true) {
+      watchForQuiet();
+      return;
+    }
+    const { send: ids, lost } = queued.takeWithLost((id) => !!store.getById(id));
+    // Cleared with the round, or deleted. The card promised to go when Claude finished and
+    // now cannot, and until this nothing withdrew that — when *everything* queued had gone,
+    // the flush returned before saying a word.
+    if (lost.length > 0) {
+      void vscode.window.showInformationMessage(
+        `Redline: ${lost.length} queued note${lost.length === 1 ? ' is' : 's are'} no longer here, ` +
+          `so ${lost.length === 1 ? 'it was' : 'they were'} not sent.`,
+      );
+    }
     if (ids.length === 0) return;
     void vscode.window.setStatusBarMessage(
       `Redline: Claude is free — sending ${ids.length} note${ids.length === 1 ? '' : 's'}`,
       4000,
     );
-    // One message for all of them, however many separate sends put them here: they are one
-    // round from the agent's point of view, and it can read them together.
-    await submit({ queueIfBusy: false, onlyIds: ids });
+    try {
+      // One message for all of them, however many separate sends put them here: they are one
+      // round from the agent's point of view, and it can read them together.
+      await submit({ queueIfBusy: false, onlyIds: ids, kind: 'automatic' });
+    } catch (err) {
+      // Back in the queue. The notes were taken out before the send, so a throw here used to
+      // lose them exactly as an escaped modal did: nothing queued, nothing sent, nothing said.
+      queued.hold(ids.filter((id) => !!store.getById(id)));
+      watchForQuiet();
+      logger.warn('the queued notes could not be sent', err);
+      void vscode.window.showWarningMessage(
+        `Redline: could not send the ${ids.length} queued note${ids.length === 1 ? '' : 's'} — ` +
+          `${err instanceof Error ? err.message : String(err)}. They are still waiting.`,
+      );
+    }
   }
 
   /**
@@ -100,10 +165,16 @@ export function batchCommands(deps: Deps) {
    * *it*", which is a lie about scope when three cards are waiting and you meant one.
    */
   function cancelQueued(arg?: unknown): void {
-    const id = typeof arg === 'string' && queued.has(arg) ? arg : undefined;
-    if (id) {
-      queued.drop([id]);
-      const note = store.getById(id);
+    if (typeof arg === 'string') {
+      // A card names itself, so "that card is not in the queue" means the card is stale —
+      // not "cancel everything". A ✕ on a card left over from a previous render called off
+      // three other people's notes, and said it had cancelled one.
+      if (!queued.has(arg)) {
+        void vscode.window.setStatusBarMessage('Redline: that note is not waiting to be sent', 4000);
+        return;
+      }
+      queued.drop([arg]);
+      const note = store.getById(arg);
       void vscode.window.setStatusBarMessage(
         `Redline: ${note ? `#${note.seq}` : 'that note'} will not be sent automatically`,
         4000,
@@ -117,10 +188,47 @@ export function batchCommands(deps: Deps) {
     void vscode.window.setStatusBarMessage('Redline: the notes will not be sent automatically', 4000);
   }
 
+  /** Whether the run we are waiting on has gone quiet long enough to look dead. */
+  function runLooksLost(): boolean {
+    // Read off the signals structurally: `Deps` describes only what a send needs to decide,
+    // and this is a hint about the same object rather than a new dependency of its own.
+    return (deps.signals as { maybeStale?: boolean } | undefined)?.maybeStale === true;
+  }
+
   function hold(ids: readonly string[], why: string): void {
     queued.hold(ids);
     void vscode.window.setStatusBarMessage(`Redline: ${why}`, 6000);
     watchForQuiet();
+    offerToSendAnyway(ids.length);
+  }
+
+  /**
+   * A way out when the Stop signal never comes.
+   *
+   * A crashed agent, a killed terminal or a hook that did not run leaves `running` true until
+   * `MAX_RUN_MS` — half an hour in which every send waited, *Cancel* only unqueued, and
+   * nothing on screen suggested the signal had been lost. Quiet for minutes is a suspicion,
+   * never a fact (a long `Bash` looks the same), so this asks rather than decides.
+   */
+  function offerToSendAnyway(count: number): void {
+    if (!runLooksLost()) return;
+    void vscode.window
+      .showWarningMessage(
+        `Redline: Claude has not reported for a while — it may no longer be running. ` +
+          `${count} note${count === 1 ? '' : 's'} held.`,
+        'Send anyway',
+      )
+      .then((choice) => {
+        if (choice !== 'Send anyway') return;
+        return sendQueuedAnyway();
+      });
+  }
+
+  /** Empty the queue into the session now, whatever the run markers still claim. */
+  async function sendQueuedAnyway(): Promise<void> {
+    const ids = queued.take((id) => !!store.getById(id));
+    if (ids.length === 0) return;
+    await submit({ queueIfBusy: false, onlyIds: ids, kind: 'automatic' });
   }
 
   /**
@@ -147,6 +255,24 @@ export function batchCommands(deps: Deps) {
       quietTimer = undefined;
       void flushQueued();
     }, QUIET_POLL_MS);
+  }
+
+  /**
+   * A queue left behind by the last window.
+   *
+   * Restored held, not sent: the run it was waiting for is long over, but so is any certainty
+   * about what the agent is doing now, and `watchForQuiet` is the thing that decides that.
+   * Notes that did not survive are dropped here rather than at the flush, where their loss
+   * would read as the flush having failed.
+   */
+  const restored = queueToRestore(memory?.get(QUEUE_KEY), (id) => !!store.getById(id));
+  if (restored.length > 0) {
+    queued.hold(restored);
+    void vscode.window.setStatusBarMessage(
+      `Redline: ${restored.length} note${restored.length === 1 ? '' : 's'} still waiting to be sent`,
+      6000,
+    );
+    watchForQuiet();
   }
 
   /**
@@ -208,23 +334,58 @@ export function batchCommands(deps: Deps) {
     if (patches.length > 0) store.updateMany(patches);
   }
 
-  function submit(opts: { queueIfBusy?: boolean; onlyIds?: readonly string[] } = {}): Promise<void> {
-    return oneAtATime(() => submitNow(opts));
+  interface SubmitOpts {
+    queueIfBusy?: boolean;
+    onlyIds?: readonly string[];
+    /** Started by hand, or by the queue emptying itself. See `shouldConfirm`. */
+    kind?: SendKind;
   }
 
-  async function submitNow(opts: { queueIfBusy?: boolean; onlyIds?: readonly string[] } = {}): Promise<void> {
+  /** Everything a send decides before it takes the lock. */
+  interface Planned {
+    batch: ReviewNote[];
+    replies: ReviewNote[];
+    ids: string[];
+    text: string;
+    target: SessionTarget | undefined;
+    fileCount: number;
+    wasSent: Map<string, ReviewNote['sent']>;
+    before: Map<string, AtRender>;
+  }
+
+  /**
+   * Decide and ask first; send under the lock.
+   *
+   * Both dialogs used to be awaited inside the serialiser. Press Send while Claude is working,
+   * leave "Send when it finishes?" sitting there, and the run ending took the ids out of the
+   * queue and then blocked in the serialiser behind that unanswered question — for the life of
+   * the window. The queue read 0, the cards read unqueued, nothing had been sent and nothing
+   * would be. Asking someone a question is not work that needs the send lock.
+   */
+  async function submit(opts: SubmitOpts = {}): Promise<void> {
+    const planned = await planSend(opts);
+    if (!planned) return;
+    return oneAtATime(() => performSend(planned));
+  }
+
+  async function planSend(opts: SubmitOpts = {}): Promise<Planned | undefined> {
     const open = store.notes.filter(isOpen);
     // Follow-ups written on notes that have already been answered. Sending a round, reading
     // the answers and replying to several of them is the ordinary way this gets used, and
     // there was no way to send that second round in one go — only note by note.
-    const replies = store.notes.filter(hasUnsentReply);
+    const unsentReplies = store.notes.filter(hasUnsentReply);
     // `onlyIds` is what a flush sends: exactly the notes that were queued, rather than
     // whatever happens to qualify by the time the agent goes quiet.
     const only = opts.onlyIds ? new Set(opts.onlyIds) : undefined;
-    const batch = (only ? store.notes.filter((n) => only.has(n.id)) : [...open, ...replies]);
+    const batch = (only ? store.notes.filter((n) => only.has(n.id)) : [...open, ...unsentReplies]);
+    // Only the follow-ups that are actually going. This was computed store-wide, so a flush of
+    // one queued note took its session from notes it was not sending: queue A, leave an
+    // unrelated answered note Z carrying a draft follow-up, and A went to Z's session. The
+    // same set decides which notes have their verdict cleared, which reached just as far.
+    const replies = batch.filter(hasUnsentReply);
     if (batch.length === 0) {
       void vscode.window.showInformationMessage('Redline: no notes to send — add one first.');
-      return;
+      return undefined;
     }
     // Busy: hold the batch rather than dropping it into the middle of a turn, where it is as
     // likely to be ignored as read.
@@ -234,10 +395,10 @@ export function batchCommands(deps: Deps) {
         'Send when free',
         'Send now',
       );
-      if (!choice) return;
+      if (!choice) return undefined;
       if (choice === 'Send when free') {
         hold(batch.map((n) => n.id), 'queued — will send when Claude finishes');
-        return;
+        return undefined;
       }
     }
     const ids = batch.map((n) => n.id);
@@ -264,7 +425,7 @@ export function batchCommands(deps: Deps) {
     const target = prepared.target;
     const fileCount = new Set(batch.map((n) => n.path)).size;
 
-    if (config.confirmOnSubmit) {
+    if (shouldConfirm(config.confirmOnSubmit, opts.kind ?? 'by hand')) {
       // Everything counted here is the batch, not the store. Flushing one queued note while
       // six others sat open counted all seven: "Send 1 note across 1 file?" over a detail line
       // reading "5 change requests · 1 question · 3 files".
@@ -294,7 +455,7 @@ export function batchCommands(deps: Deps) {
         'Send',
         'Preview first',
       );
-      if (!choice) return;
+      if (!choice) return undefined;
       if (choice === 'Preview first') {
         await openPreview(text, config.outputTemplate === 'json' ? 'json' : 'markdown');
         const again = await vscode.window.showInformationMessage(
@@ -302,9 +463,14 @@ export function batchCommands(deps: Deps) {
           { modal: true },
           'Send',
         );
-        if (again !== 'Send') return;
+        if (again !== 'Send') return undefined;
       }
     }
+    return { batch, replies, ids, text, target, fileCount, wasSent, before };
+  }
+
+  async function performSend(planned: Planned): Promise<void> {
+    const { batch, replies, ids, text, target, fileCount, wasSent, before } = planned;
 
     // A round starts with no report on disk. `applyReportFrom` leaves an unreadable one where
     // it is on purpose, and an agent that is interrupted never finishes the write — so round
@@ -974,6 +1140,22 @@ export function batchCommands(deps: Deps) {
   // ── reviewing changes ────────────────────────────────────────────────
 
   /**
+   * Say that git could not list the changes — which is not the same as there being none.
+   *
+   * The same words the panel uses for the same state, and the same way out of it: reading the
+   * log is the only thing that says *which* failure it was (an `index.lock` a background
+   * `git gc` is holding, output past `maxBuffer`, a timeout). Inventing a second vocabulary
+   * for one condition would mean two things to learn for one problem.
+   */
+  async function sayChangesUnavailable(): Promise<void> {
+    const choice = await vscode.window.showWarningMessage(
+      'Redline: changes unavailable — git could not list the changed files here. This is not "nothing changed".',
+      'Show Log',
+    );
+    if (choice === 'Show Log') await vscode.commands.executeCommand('redline.showLog');
+  }
+
+  /**
    * PR-style multi-file diff. By default it shows the latest burst of edits — the work you
    * just want to re-read — with everything else one command away.
    */
@@ -1006,12 +1188,16 @@ export function batchCommands(deps: Deps) {
       );
       return;
     }
-    const count = scope === 'recent' ? s.recentCount : s.fileCount;
-    if (count === 0) {
+    const outcome = changesToShow(s, scope);
+    if (outcome.kind === 'unavailable') {
+      await sayChangesUnavailable();
+      return;
+    }
+    if (outcome.kind === 'none') {
       // A dead end otherwise: the last run changed nothing, and the thing you almost certainly
       // want next — everything since the base — is one click away and was not offered.
-      if (scope === 'recent' && s.fileCount > 0) {
-        const other = `${s.fileCount} file${s.fileCount === 1 ? '' : 's'}`;
+      if (outcome.otherCount > 0) {
+        const other = `${outcome.otherCount} file${outcome.otherCount === 1 ? '' : 's'}`;
         const choice = await vscode.window.showInformationMessage(
           `Redline: the last run changed nothing. ${other} changed ${s.label}.`,
           'Show all changes',
@@ -1022,6 +1208,7 @@ export function batchCommands(deps: Deps) {
       void vscode.window.showInformationMessage(`Redline: nothing changed ${s.label}.`);
       return;
     }
+    const count = outcome.count;
     const breakdown = await range.statusBreakdown(scope);
     const files = `${count} file${count === 1 ? '' : 's'}${breakdown ? ` (${breakdown})` : ''}`;
     const title = scope === 'recent' ? `Latest changes — ${files} ${s.recentLabel}` : `All changes — ${files} ${s.label}`;
@@ -1079,18 +1266,22 @@ export function batchCommands(deps: Deps) {
   const reviewChanges = (): Promise<void> => openChanges('recent');
   const reviewAllChanges = (): Promise<void> => openChanges('all');
 
-  async function nextChange(): Promise<void> {
-    if (!(await range.walk(1))) {
-      const s = await range.summary();
-      void vscode.window.showInformationMessage(`Redline: nothing changed ${s?.label ?? 'to review'}.`);
+  /** Nothing to walk to. Whether that is "no changes" or "we could not find out" is the point. */
+  async function sayNothingToWalk(): Promise<void> {
+    const s = await range.summary();
+    if (s?.unavailable) {
+      await sayChangesUnavailable();
+      return;
     }
+    void vscode.window.showInformationMessage(`Redline: nothing changed ${s?.label ?? 'to review'}.`);
+  }
+
+  async function nextChange(): Promise<void> {
+    if (!(await range.walk(1))) await sayNothingToWalk();
   }
 
   async function prevChange(): Promise<void> {
-    if (!(await range.walk(-1))) {
-      const s = await range.summary();
-      void vscode.window.showInformationMessage(`Redline: nothing changed ${s?.label ?? 'to review'}.`);
-    }
+    if (!(await range.walk(-1))) await sayNothingToWalk();
   }
 
   async function markBaseline(): Promise<void> {

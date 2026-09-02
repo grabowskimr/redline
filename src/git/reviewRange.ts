@@ -13,7 +13,7 @@ import { RUN_GRACE_MS, selectRunFiles } from './runFiles';
 import { touchedPathsSince } from '../claude/touched';
 import { differsFromSnapshot, readSnapshot, RunSnapshot } from '../claude/snapshot';
 import { PastRun, readRunTrees, RunTree, RunTrees } from '../claude/runTrees';
-import { binaryPaths, GitRunner, nulFields, snapshotWorkingTree, treeChanges, TreeChange } from './snapshotTree';
+import { binaryPaths, EMPTY_TREE, GitRunner, nulFields, snapshotWorkingTree, treeChanges, TreeChange } from './snapshotTree';
 import { treeSide } from './treeSide';
 
 const execFileP = promisify(execFile);
@@ -71,7 +71,7 @@ export function registerEmptySideProvider(): vscode.Disposable {
 }
 
 /** What happened to a path between two points. Decides which sides a diff has. */
-type ChangeStatus = TreeChange;
+export type ChangeStatus = TreeChange;
 
 /** Above this, a recomputation is worth explaining in the log. */
 const SLOW_SUMMARY_MS = 500;
@@ -196,7 +196,11 @@ export interface RangeSummary {
    */
   recent: string[];
   recentCount: number;
-  /** Label for the burst, e.g. `in the last run (since 14:31)`. */
+  /**
+   * Label for the burst, e.g. `in the last run (since 14:31)`. Built by `recentLabelFor`,
+   * which is where the wording is decided — never assembled at the call site, so that the
+   * signal behind the burst and the words describing it cannot drift apart.
+   */
   recentLabel: string;
   /** How many changed files are older than the burst. */
   olderCount: number;
@@ -208,6 +212,90 @@ export interface RangeSummary {
   recentSource: 'hook' | 'transcript' | 'mtime';
   /** True when the file list could not be read at all — distinct from "nothing changed". */
   unavailable?: boolean;
+}
+
+/**
+ * What to call the trailing burst of changes, given the signal that produced it.
+ *
+ * A cluster of modification times is not a run and must not be called one. `recentSource` was
+ * computed and then read by nothing outside this file, so every burst was announced as "in
+ * the last run (since 09:12)" — including the one an `npm install` or a `git checkout`
+ * restamps four hundred files into. Being told the agent changed four hundred files it never
+ * touched is the worst answer this feature can give, and it was given in the same confident
+ * words as the exact one.
+ *
+ * The hook's snapshots and the session transcript both describe a real run and keep the run
+ * wording. File times describe files, and say so.
+ */
+export function recentLabelFor(source: RangeSummary['recentSource'], since?: string): string {
+  if (source === 'mtime') {
+    return since ? `since ${shortTime(since)} (file times, not a run)` : 'recently (file times, not a run)';
+  }
+  return since ? `in the last run (since ${shortTime(since)})` : 'in the last run';
+}
+
+/** What a review scope has to offer, including the case where nobody could find out. */
+export type ChangesToShow =
+  | { kind: 'unavailable' }
+  | { kind: 'none'; otherCount: number }
+  | { kind: 'files'; count: number };
+
+/**
+ * Whether a scope has anything to open — asked of the summary, not of a count.
+ *
+ * A failed `git diff --name-status` (an `index.lock` from a background `git gc`, output past
+ * `maxBuffer`, a timeout) leaves both counts at zero, which read as a clean tree everywhere
+ * that branched on the number alone. "Nothing changed since the last commit" is then a
+ * confident statement about the user's code that nothing checked, and it hides the agent's
+ * entire run. The panel already separated the two; the commands and the status bar did not.
+ */
+export function changesToShow(
+  summary: Pick<RangeSummary, 'fileCount' | 'recentCount' | 'unavailable'>,
+  scope: 'recent' | 'all',
+): ChangesToShow {
+  if (summary.unavailable) return { kind: 'unavailable' };
+  const count = scope === 'recent' ? summary.recentCount : summary.fileCount;
+  if (count > 0) return { kind: 'files', count };
+  // The other scope is worth offering only when this one is the narrow one.
+  return { kind: 'none', otherCount: scope === 'recent' ? summary.fileCount : 0 };
+}
+
+/** Where one side of a comparison reads its content from. */
+export type SideSource =
+  | { from: 'working' }
+  | { from: 'empty'; note?: string }
+  | { from: 'tree'; which: 'left' | 'now'; path: string }
+  | { from: 'base'; path: string };
+
+/**
+ * Which documents the two sides of one entry come from, when both trees are available.
+ *
+ * `onDisk` is the part that was missing. The tree branch decided each side from the snapshot's
+ * status alone and never asked whether the file was still there, so deleting or cleaning a
+ * changed file after the run left an entry whose right-hand side pointed at nothing:
+ * `vscode.changes` drops those silently while the title still says "12 files". The file's
+ * content is in the snapshot — that is what a tree is for — so it is served from there rather
+ * than counted and then hidden.
+ */
+export function treeSides(
+  rel: string,
+  status: ChangeStatus | undefined,
+  opts: { onDisk: boolean; binary: boolean },
+): { left: SideSource; right: SideSource } {
+  const from = status?.kind === 'renamed' ? status.from : rel;
+  const right: SideSource =
+    status?.kind === 'deleted'
+      ? { from: 'empty', note: 'deleted' }
+      : opts.onDisk
+        ? { from: 'working' }
+        : { from: 'tree', which: 'now', path: rel };
+  // Added: nothing to read out of the left snapshot, and saying so is more use than an
+  // unlabelled empty pane.
+  if (status?.kind === 'added') return { left: { from: 'empty', note: 'new file' }, right };
+  // An image cannot be served as text. Compared against the base instead, where the git
+  // extension has a resource the editor can load properly.
+  if (opts.binary) return { left: { from: 'base', path: from }, right };
+  return { left: { from: 'tree', which: 'left', path: from }, right };
 }
 
 /**
@@ -528,9 +616,32 @@ export class ReviewRange implements vscode.Disposable {
       const head = await this.head();
       if (head) return { base: head, label: 'since the last commit', origin: 'head' };
     } catch (err) {
+      // `git init` and nothing committed yet: `rev-parse HEAD` fails, every base above it
+      // fails with it, and the caller reported that as "no git repository here — or git is
+      // not on PATH". Both halves false, and it sends someone hunting for a broken install
+      // instead of looking at the first files they have written. The empty tree is a real
+      // "before" for exactly this case, which is what it was exported for.
+      if (await this.unbornHead()) {
+        return { base: EMPTY_TREE, label: 'since the repository was created', origin: 'head' };
+      }
       this.logger.warn('could not resolve HEAD', err);
     }
     return undefined;
+  }
+
+  /**
+   * Whether HEAD names a branch that has no commit on it yet.
+   *
+   * Only ever asked after `rev-parse HEAD` has already failed, which is what makes the answer
+   * mean "brand new repository" rather than "normal repository": `symbolic-ref` succeeds in
+   * both, and fails along with everything else when git itself is unusable.
+   */
+  private async unbornHead(): Promise<boolean> {
+    try {
+      return (await this.run(['symbolic-ref', '--quiet', 'HEAD'])).trim().length > 0;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -720,7 +831,7 @@ export class ReviewRange implements vscode.Disposable {
       fileCount: all.length,
       recent,
       recentCount: recent.length,
-      recentLabel: recentSince ? `in the last run (since ${shortTime(recentSince)})` : 'in the last run',
+      recentLabel: recentLabelFor(recentSource, recentSince),
       olderCount: all.length - recent.length,
       recentSource,
     };
@@ -752,9 +863,14 @@ export class ReviewRange implements vscode.Disposable {
     t0: number,
     tBase: number,
   ): Promise<RangeSummary | undefined> {
-    if (!resolved.run) return undefined;
     const root = await this.repoRoot();
     if (!root) return undefined;
+    // Not gated on `resolved.run`. It used to be, and `run` is only ever set on the session
+    // branch of `computeBase` — so pinning a baseline, or opening a repository with no
+    // transcript to read, silently switched the exact comparison off and dropped to the mtime
+    // cluster while the label still said "in the last run". Two very different answers wearing
+    // one set of words. The hook's own snapshots *are* the run boundary; which commit the
+    // range is measured from is a separate question, and `resolved.base` still answers it.
     const trees = await this.runTrees(root, resolved.run);
     const before = trees?.before;
     if (!before) return undefined;
@@ -829,7 +945,7 @@ export class ReviewRange implements vscode.Disposable {
       fileCount: files.length,
       recent,
       recentCount: recent.length,
-      recentLabel: `in the last run (since ${shortTime(before.at)})`,
+      recentLabel: recentLabelFor('hook', before.at),
       // Files changed since the base that this run did not touch — not a subtraction of the
       // two counts, which no longer overlap completely.
       olderCount: files.filter((f) => !inRun.has(f)).length,
@@ -846,14 +962,31 @@ export class ReviewRange implements vscode.Disposable {
   }
 
   /**
-   * The tree recorded when this run's request was submitted.
+   * The tree the last run that changed something started from.
    *
-   * Checked against the run the transcript reports: a snapshot older than that belongs to an
-   * earlier run, which would report the *previous* run's work as this one's — the exact
-   * failure this mechanism exists to prevent. The hook writes it and the transcript records
-   * the same moment, so the tolerance only absorbs clock jitter.
+   * The check here is that the hook is *keeping up*, not that the boundary is recent. Those
+   * were the same question while the hook moved the boundary at every request, and the guard
+   * was written as "a snapshot older than the run the transcript reports belongs to an earlier
+   * run" — which would report the previous run's work as this one's.
+   *
+   * Hook 2 moves the boundary at the first change instead, so `before` is deliberately older
+   * than the request under review whenever the turns in between only talked: a question, an
+   * answer read, a note approved, a turn whose writes all landed outside the repository. Under
+   * the old guard every one of those looked like a hook that had stopped writing, and a
+   * minute of conversation dropped the panel to the mtime heuristic — which reports nothing
+   * changed, because nothing has been modified since. Between them, the two halves of that is
+   * how a run's work disappeared from the gutter while it sat uncommitted in the tree.
+   *
+   * `pending` is what separates the two: the hook writes it at every request whether or not
+   * anything changes, so it dates the last request the hook actually saw. An old `before` with
+   * a current `pending` is the boundary doing its job; an old `before` with no `pending` at all
+   * is hook 1, or a hook that has stopped, and is still rejected exactly as before.
+   *
+   * `run` is optional because there is not always a transcript to check against — a pinned
+   * baseline has none. There is then nothing to contradict the snapshot, and the snapshot is
+   * still the only exact record of where the run began, so it is used as it stands.
    */
-  private async runTrees(root: string, run: { since: string }): Promise<RunTrees | undefined> {
+  private async runTrees(root: string, run?: { since: string }): Promise<RunTrees | undefined> {
     let trees = await readRunTrees(root);
     if (!trees) {
       for (const cwd of [...this.cwdHints].slice(-MAX_CWD_HINTS)) {
@@ -863,11 +996,17 @@ export class ReviewRange implements vscode.Disposable {
     }
     const before = trees?.before;
     if (!before) return undefined;
-    const snapAt = Date.parse(before.at);
-    const runAt = Date.parse(run.since);
-    if (Number.isFinite(snapAt) && Number.isFinite(runAt) && snapAt < runAt - SNAPSHOT_TOLERANCE_MS) {
+    // The most recent request the hook recorded, which is what says whether it is still
+    // watching. Only timestamps that parse count, or an unreadable one would produce a `NaN`
+    // that skips the guard altogether.
+    const stamps = [before.at, trees?.pending?.at]
+      .map((at) => (at ? Date.parse(at) : Number.NaN))
+      .filter((ms) => Number.isFinite(ms));
+    const heardAt = stamps.length > 0 ? Math.max(...stamps) : Number.NaN;
+    const runAt = run ? Date.parse(run.since) : Number.NaN;
+    if (Number.isFinite(heardAt) && Number.isFinite(runAt) && heardAt < runAt - SNAPSHOT_TOLERANCE_MS) {
       this.logger.info(
-        `ignoring a snapshot from ${before.at}: the run started at ${run.since}, so the hook did not record this request`,
+        `ignoring a snapshot from ${before.at}: the run started at ${run?.since}, so the hook did not record this request`,
       );
       return undefined;
     }
@@ -1333,31 +1472,44 @@ export class ReviewRange implements vscode.Disposable {
       const statuses = scope === 'recent' ? this.runStatuses : this.statuses;
       // Only asked when a diff is actually opened, not on every refresh.
       const binary = await this.binaryIn(left, trees.now);
+      // The snapshot says what the run did; it cannot say whether the file survived the
+      // minutes since. Delete or clean one of the changed files before opening the review and
+      // its right-hand side pointed at a path that is no longer there — `vscode.changes` drops
+      // the entry without a word while the title still counts it. One stat per file, and only
+      // when a diff is actually opened, buys the difference between a shown file and a phantom
+      // one. The same call the fallback branch below has always made.
+      const onDisk = new Set(
+        (await Promise.all(uris.map(async (u) => ((await this.exists(u)) ? u.toString() : undefined)))).filter(
+          (v): v is string => v !== undefined,
+        ),
+      );
+      const resolve = (uri: vscode.Uri, side: SideSource): vscode.Uri => {
+        switch (side.from) {
+          case 'working':
+            return uri;
+          case 'empty':
+            return emptySide(uri, side.note);
+          case 'tree':
+            return treeSide(root, side.which === 'left' ? left : trees.now, side.path);
+          case 'base': {
+            try {
+              // An image cannot be served as text; the git extension has a resource for it.
+              return api?.toGitUri(vscode.Uri.file(path.join(root, side.path)), summary.base) ?? emptySide(uri);
+            } catch {
+              return emptySide(uri);
+            }
+          }
+        }
+      };
       return uris.map((uri) => {
         const rel = path.relative(root, uri.fsPath);
         const status = statuses.get(rel);
-        // A path absent from the left tree — a file the run created — resolves to an empty
-        // document, which reads as the whole file arriving. Nothing to special-case.
         const from = status?.kind === 'renamed' ? status.from : rel;
-        const modified = status?.kind === 'deleted' ? emptySide(uri, 'deleted') : uri;
-        // Added: nothing to read out of the snapshot, and saying so is more use than an
-        // unlabelled empty pane.
-        if (status?.kind === 'added') {
-          return [uri, emptySide(uri, 'new file'), modified] as [vscode.Uri, vscode.Uri, vscode.Uri];
-        }
-        // An image cannot be served as text. Compared against the base instead, where the git
-        // extension has a resource the editor can load properly. An added one never reaches
-        // here — it was answered above, where there is nothing to compare against at all.
-        if (binary.has(from) || binary.has(rel)) {
-          let original: vscode.Uri | undefined;
-          try {
-            original = api?.toGitUri(vscode.Uri.file(path.join(root, from)), summary.base);
-          } catch {
-            original = undefined;
-          }
-          return [uri, original ?? emptySide(uri), modified] as [vscode.Uri, vscode.Uri, vscode.Uri];
-        }
-        return [uri, treeSide(root, left, from), modified] as [vscode.Uri, vscode.Uri, vscode.Uri];
+        const sides = treeSides(rel, status, {
+          onDisk: onDisk.has(uri.toString()),
+          binary: binary.has(from) || binary.has(rel),
+        });
+        return [uri, resolve(uri, sides.left), resolve(uri, sides.right)] as [vscode.Uri, vscode.Uri, vscode.Uri];
       });
     }
     // For the last run, compare against the snapshot taken when the request was submitted:

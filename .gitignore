@@ -6,3 +6,7 @@ dist/
 .DS_Store
 media/codicon.css
 media/codicon.ttf
+
+# The integration fixture is a git repository of its own, created at test time: the diff
+# commands under test must answer about it and not about the repository that contains it.
+test-fixtures/workspace/.git/

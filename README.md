@@ -224,6 +224,13 @@ tree — see below. Without it, the run is cut where the agent was idle longer t
 `redline.lastRunGapMinutes`, and files are dated by modification time, which cannot tell your
 own saves from the agent's work.
 
+**A run that changed nothing is not the last run.** Talking to the agent does not clear the
+view: asking what it did, reading the answer, approving a note, or a turn whose only writes
+went somewhere other than this repository all leave the last run that *did* change something on
+screen, however many turns ago that was. The boundary moves when work lands, not when you press
+Enter — so the marks in the gutter stay put through a conversation about them, and go when the
+next run replaces them.
+
 ## Prompts you type yourself
 
 Redline does not have to be the one that started the run. Every prompt goes through the
@@ -271,6 +278,12 @@ delivery word, which is the one case where the whole point is to put it in front
   About 20 ms, and it reports added, deleted, modified and renamed exactly — no timestamps, no
   separate listing for untracked files, no guessing who wrote what. This is what makes a file
   the run *created* appear, alongside the file whose import it updated.
+
+  The `UserPromptSubmit` snapshot is a *candidate* boundary rather than the boundary. It takes
+  over at the moment the run first writes a file in this repository, and a run that never does
+  leaves the previous boundary standing — which is what keeps a conversation from emptying the
+  view. A run interrupted before `Stop` never records an end of its own, so it is closed with
+  the tree at the next request and marked as approximate rather than dropped.
 - **Line-level accuracy.** **Last run** compares each file against the snapshot, not against the
   base commit — so editing line 2 in one run and line 4 in the next shows line 4 alone. Git
   cannot do this on its own: a diff against a base commit is cumulative.

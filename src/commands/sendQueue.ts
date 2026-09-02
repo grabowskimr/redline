@@ -48,11 +48,25 @@ export class SendQueue {
    * because sending an id the store no longer has produces an empty message.
    */
   take(stillThere: (id: string) => boolean): string[] {
-    const out = [...this.ids].filter(stillThere);
+    return this.takeWithLost(stillThere).send;
+  }
+
+  /**
+   * The same, saying which ids were dropped for having no note behind them any more.
+   *
+   * The dropping was silent, and when everything queued had gone the flush returned before
+   * saying a word: run *Clear sent*, or delete the note, and the card that had promised to go
+   * when Claude finished simply went back to looking unsent. A promise that cannot be kept has
+   * to be withdrawn out loud.
+   */
+  takeWithLost(stillThere: (id: string) => boolean): { send: string[]; lost: string[] } {
+    const send: string[] = [];
+    const lost: string[] = [];
+    for (const id of this.ids) (stillThere(id) ? send : lost).push(id);
     const had = this.ids.size > 0;
     this.ids.clear();
     if (had) this.onChange();
-    return out;
+    return { send, lost };
   }
 
   /**
@@ -74,4 +88,50 @@ export class SendQueue {
     this.onChange();
     return true;
   }
+}
+
+/** Whether a send should put the confirmation in front of the user. */
+export type SendKind =
+  /** Someone pressed a button just now. */
+  | 'by hand'
+  /** The queue emptying itself because the run ended. Nobody is watching. */
+  | 'automatic';
+
+/**
+ * `confirmOnSubmit` defaults to true, and the automatic flush went through the same modal.
+ *
+ * Queue three notes, walk away, and the end of the run put up a dialog with nobody there to
+ * answer it — while the flush had already emptied the queue, so escaping it lost the notes:
+ * no timer watching, nothing said, and the cards back to looking merely unsent. The strip's
+ * own tooltip promised they go the moment Claude finishes, which was false for every
+ * default-config user.
+ *
+ * The person confirmed when they pressed Send. The queue is a delay, not a second decision.
+ */
+export function shouldConfirm(configured: boolean, kind: SendKind): boolean {
+  return configured && kind === 'by hand';
+}
+
+/**
+ * The queued ids worth restoring into a new window.
+ *
+ * The queue was a bare `Set` in memory and nothing wrote it down: close VS Code before the run
+ * ended and three notes that had been promised delivery came back as ordinary unsent drafts,
+ * with no record that anything had been promised at all.
+ *
+ * Persisting it rather than warning on the way out, because a warning is the harder of the two
+ * to reason about: `deactivate` is not a place a dialog can be relied on to appear, so the
+ * warning would be the thing that silently did not happen. Restoring is also the answer that
+ * keeps the promise instead of apologising for it. Ids whose notes did not survive are dropped
+ * here — a stored id with no note behind it would only be lost again at the next flush.
+ */
+export function queueToRestore(stored: unknown, stillThere: (id: string) => boolean): string[] {
+  if (!Array.isArray(stored)) return [];
+  const out: string[] = [];
+  for (const id of stored) {
+    if (typeof id !== 'string' || id === '') continue;
+    if (out.includes(id) || !stillThere(id)) continue;
+    out.push(id);
+  }
+  return out;
 }
