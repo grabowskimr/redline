@@ -48,7 +48,7 @@ describe('Redline in VS Code', function () {
     }
     await exec('git', ['add', '-A'], { cwd: root });
     await exec('git', ['commit', '-qm', 'base'], { cwd: root });
-    extension = vscode.extensions.getExtension<RedlineAPI>('grabowskmr.redline')!;
+    extension = vscode.extensions.getExtension<RedlineAPI>('grabowskmr.redline-for-claude-code')!;
     assert.ok(extension);
     api = await extension.activate();
     await api.ready;

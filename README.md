@@ -29,7 +29,7 @@ You need Git, Node.js, and Claude Code. No API key or extra billing: Redline wor
 
 ### 1. Install the extension
 
-In VS Code, open the Extensions view, search for **Redline**, and click **Install**.
+In VS Code, open the Extensions view, search for **Redline for Claude Code**, and click **Install**.
 
 ### 2. Add the recorder to Claude Code
 

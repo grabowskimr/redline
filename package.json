@@ -1,6 +1,6 @@
 {
-  "name": "redline",
-  "displayName": "Redline",
+  "name": "redline-for-claude-code",
+  "displayName": "Redline for Claude Code",
   "description": "See Claude Code\u2019s last changes and accept unreviewed files in a native VS Code diff viewer.",
   "version": "1.0.0",
   "publisher": "grabowskmr",
