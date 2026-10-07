@@ -36,6 +36,9 @@ In VS Code, open the Extensions view, search for **Redline**, and click **Instal
 Redline learns what Claude Code changed through a small Claude Code plugin. To add it:
 
 1. Run **Redline: Set Up Claude Code Plugin**, from the **⋯** menu of the Redline view or the Command Palette. It copies a setup prompt to your clipboard.
+
+   ![Set Up Claude Code Plugin in the ⋯ menu of the Redline view](images/setup-menu.png)
+
 2. Paste it into Claude Code and send it.
 3. Restart Claude Code (`claude --continue` brings back your conversation).
 
