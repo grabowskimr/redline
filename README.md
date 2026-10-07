@@ -6,7 +6,7 @@ Keep talking to Claude in the terminal as usual. When a prompt finishes, open **
 
 ## How Redline detects Claude Code’s changes
 
-Code Redline ships with a small Claude Code companion plugin. Its three hooks mark the boundaries of every prompt:
+The Redline plugin for Claude Code uses three hooks to mark the boundaries of every prompt:
 
 - **`UserPromptSubmit`** — when you send a prompt, the recorder snapshots the worktree.
 - **`Stop`** — when Claude finishes, it snapshots the worktree again. The difference between the two snapshots is that prompt’s run.
@@ -20,14 +20,29 @@ Records live under `~/.claude/redline/repo-<hash>/runs.json`. Snapshot and accep
 
 ## Set up
 
-Requires Git, Node.js, a trusted local workspace, and Claude Code with plugin support. No API key or extra billing: Redline works with your existing Claude Code terminal and subscription.
+You need Git, Node.js, and Claude Code. No API key or extra billing: Redline works with your existing Claude Code subscription.
 
-1. Install **Code Redline** from the Extensions view (search for “Code Redline”).
-2. Run **Code Redline: Set Up Claude Code Plugin**. It stages the bundled recorder at a stable path and opens the installation commands. If an older Redline registration is detected, the commands replace it.
-3. Run those commands, restart Claude Code, and resume your session. Remove any old manually configured `redline-touched` hooks so the recorder does not run twice.
-4. Send Claude a prompt that changes code, wait for it to finish, and run **Code Redline: Show Changes**.
+### 1. Install the extension
 
-The extension is version 2.0.1 and its bundled companion is version 2.0.0. After updating the companion, restart Claude: a session that is already running may still hold the old hook configuration.
+In VS Code, open the Extensions view, search for **Code Redline**, and click **Install**.
+
+### 2. Add the recorder to Claude Code
+
+Redline learns what Claude Code changed through a small Claude Code plugin. To add it:
+
+1. Run **Code Redline: Set Up Claude Code Plugin**, from the **⋯** menu of the Code Redline panel or the Command Palette. It copies a setup prompt to your clipboard.
+2. Paste it into Claude Code and send it.
+3. Restart Claude Code (`claude --continue` brings back your conversation).
+
+### 3. Try it
+
+Ask Claude to change some code and wait for it to finish. Then run **Code Redline: Show Changes** from the Command Palette: the files Claude changed are listed, and clicking one opens the diff.
+
+### Updating and removing
+
+To update the recorder, run **Set Up Claude Code Plugin** again, paste the prompt into Claude Code, and restart Claude Code.
+
+To remove it, run `claude plugin uninstall redline@redline` and `claude plugin marketplace remove redline`.
 
 ## See the last changes
 
@@ -61,12 +76,6 @@ The scope button in the view title switches to **Unreviewed**: every file change
 | `redline.showStatusBar` | `true` | Show the current file count and a shortcut to the viewer. |
 | `redline.trace` | `errors` | Output channel verbosity: `off`, `errors`, or `verbose`. |
 
-## Upgrading from 1.x
-
-2.0 replaces the notes/chat panel with a native diff viewer. Inline comments, editor plus buttons, feedback delivery, Claude replies, chat controls, GitHub comment forwarding, and Everything have been removed. Existing run records and acceptance refs remain readable. Old note/outbox files are left untouched but are never consumed by the 2.0 recorder.
-
-After upgrading, run **Developer: Reload Window** once. Restarting only the extension host can leave the old Notes view registered and cause `redline.changes.focus` to be missing. Version 2.0.1 offers a **Reload Window** action when this happens. This extension fix still uses the 2.0.0 Claude Code companion.
-
 ## Development
 
 ```sh
@@ -77,7 +86,7 @@ npm run test:integration
 npm run package
 ```
 
-To use the companion from a checkout instead of the bundled copy, register the repository as a local Claude Code marketplace:
+To test the companion from a checkout instead of GitHub, register the repository as a local Claude Code marketplace:
 
 ```sh
 claude plugin marketplace add /absolute/path/to/local-review

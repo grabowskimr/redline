@@ -1,66 +1,34 @@
 import * as vscode from 'vscode';
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { Logger } from '../logger';
 
-const exec = promisify(execFile);
-const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
+/** The public GitHub repository Claude Code installs the companion from. */
+const MARKETPLACE = 'grabowskimr/redline';
 
-/** Stage this exact companion version at a path which survives extension updates. */
-export async function setUpHook(context: vscode.ExtensionContext, logger: Logger): Promise<void> {
-  const target = path.join(context.globalStorageUri.fsPath, 'companion');
-  await fs.mkdir(path.join(target, '.claude-plugin'), { recursive: true });
-  await fs.copyFile(
-    path.join(context.extensionUri.fsPath, '.claude-plugin/marketplace.json'),
-    path.join(target, '.claude-plugin/marketplace.json'),
+/**
+ * A prompt the user pastes into Claude Code, which then installs the companion itself. It is the
+ * same on every machine: no local paths, and an older Redline registration is replaced in place.
+ */
+export const SETUP_PROMPT = `Install the Code Redline recorder plugin for Claude Code by running these shell commands:
+
+1. If \`claude plugin list\` shows \`redline@redline\`, uninstall it with \`claude plugin uninstall redline@redline\`, adding \`--scope\` with the scope it is listed under.
+2. If \`claude plugin marketplace list\` shows a marketplace named \`redline\`, remove it with \`claude plugin marketplace remove redline\`.
+3. Run \`claude plugin marketplace add ${MARKETPLACE}\`.
+4. Run \`claude plugin install redline@redline --scope user\`.
+5. Run \`claude plugin list\` and confirm \`redline@redline\` is enabled.
+
+Change nothing else. When it is done, tell me to restart Claude Code (\`claude --continue\` resumes this conversation) so the recorder's hooks load.`;
+
+/** Copy the setup prompt and say where it goes; the prompt itself stays one click away. */
+export async function setUpHook(): Promise<void> {
+  await vscode.env.clipboard.writeText(SETUP_PROMPT);
+  const choice = await vscode.window.showInformationMessage(
+    'Setup prompt copied. Paste it into Claude Code and send it.',
+    'Show Prompt',
   );
-  await fs.cp(path.join(context.extensionUri.fsPath, 'plugin'), path.join(target, 'plugin'), {
-    recursive: true,
-  });
-  let installed: Array<{
-    id: string;
-    version?: string;
-    scope?: string;
-    enabled?: boolean;
-    errors?: string[];
-  }> = [];
-  let registered = false,
-    inspected = false;
-  try {
-    const [plugins, marketplaces] = await Promise.all([
-      exec('claude', ['plugin', 'list', '--json'], { timeout: 15_000 }),
-      exec('claude', ['plugin', 'marketplace', 'list', '--json'], { timeout: 15_000 }),
-    ]);
-    installed = (JSON.parse(plugins.stdout) as typeof installed).filter(
-      (p) => p.id === 'redline@redline',
-    );
-    registered = (JSON.parse(marketplaces.stdout) as Array<{ name: string }>).some(
-      (m) => m.name === 'redline',
-    );
-    inspected = true;
-  } catch (error) {
-    logger.trace('Claude plugin inventory unavailable', String(error));
+  if (choice === 'Show Prompt') {
+    const doc = await vscode.workspace.openTextDocument({
+      language: 'markdown',
+      content: `# Set up Code Redline\n\nPaste this into Claude Code:\n\n---\n\n${SETUP_PROMPT}\n`,
+    });
+    await vscode.window.showTextDocument(doc, { preview: false });
   }
-  const commands = [
-    ...installed.map(
-      (p) => `claude plugin uninstall redline@redline --scope ${quote(p.scope ?? 'user')}`,
-    ),
-    ...(registered ? ['claude plugin marketplace remove redline'] : []),
-    `claude plugin marketplace add ${quote(target)}`,
-    'claude plugin install redline@redline --scope user',
-  ].join('\n');
-  const state = installed.length
-    ? installed
-        .map((p) => `${p.version ?? 'unknown version'} (${p.enabled ? 'enabled' : 'disabled'})`)
-        .join(', ')
-    : inspected
-      ? 'Not installed'
-      : 'Could not inspect Claude Code from VS Code’s PATH';
-  const doc = await vscode.workspace.openTextDocument({
-    language: 'markdown',
-    content: `# Set up Code Redline 2.0\n\nInstalled companion: ${state}.\n\nRun these commands in your terminal to install the bundled 2.0 recorder. They replace only the Redline marketplace/plugin registration; saved runs and accepted-file baselines stay intact.\n\n\`\`\`sh\n${commands}\n\`\`\`\n\n${inspected ? '' : 'If the Redline marketplace is already registered, remove its plugin and marketplace registration first, then rerun the commands above.\n\n'}Restart Claude Code (resume your existing session), then run a prompt. The next completed code-changing prompt appears in Last run.\n\nRemove any manually configured redline-touched hooks from Claude settings to avoid duplicate recorders. Keep other plugins and hooks.\n\nThe 2.0 companion uses only UserPromptSubmit, Stop and StopFailure. It does not receive messages or read Claude’s answers.\n`,
-  });
-  await vscode.window.showTextDocument(doc, { preview: false });
 }

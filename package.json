@@ -2,8 +2,8 @@
   "name": "redline",
   "displayName": "Code Redline",
   "description": "See Claude Code\u2019s last changes and accept unreviewed files in a native VS Code diff viewer.",
-  "version": "2.0.1",
-  "publisher": "marcin",
+  "version": "1.0.0",
+  "publisher": "grabowskmr",
   "license": "MIT",
   "repository": {
     "type": "git",

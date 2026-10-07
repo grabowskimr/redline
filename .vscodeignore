@@ -15,11 +15,3 @@
 !dist/extension.js
 !resources/icon.png
 !resources/icon.svg
-
-# The Claude Code plugin, which `redline.setUpHook` installs from inside the extension.
-!.claude-plugin/marketplace.json
-!plugin/.claude-plugin/plugin.json
-!plugin/hooks/hooks.json
-!plugin/hooks/redline-touched.mjs
-!plugin/hooks/rebase.cjs
-!plugin/hooks/redline-touched.sh

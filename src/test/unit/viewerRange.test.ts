@@ -18,7 +18,7 @@ interface RangeUnderTest {
   dispose(): void;
 }
 
-describe('2.0 session-owned viewer range', function () {
+describe('session-owned viewer range', function () {
   this.timeout(15000);
   let root: string, home: string, range: RangeUnderTest, git: ReturnType<typeof gitIn>;
   let before: string, after: string;

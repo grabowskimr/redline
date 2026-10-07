@@ -9,7 +9,7 @@ import { stateDirectory } from '../../claude/statePaths';
 const exec = promisify(execFile);
 const script = path.resolve(__dirname, '../../../plugin/hooks/redline-touched.mjs');
 
-describe('2.0 boundary-only capture', function () {
+describe('boundary-only capture', function () {
   this.timeout(20000);
   let root: string, home: string;
   const git = async (...args: string[]) => (await exec('git', args, { cwd: root })).stdout.trim();

@@ -16,7 +16,7 @@ const waitFor = async (test: () => boolean, message: string) => {
   }
 };
 
-describe('Code Redline 2.0 in VS Code', function () {
+describe('Code Redline in VS Code', function () {
   this.timeout(30000);
   let api: RedlineAPI, root: string, extension: vscode.Extension<RedlineAPI>;
   const hook = (event: string) =>
@@ -48,7 +48,7 @@ describe('Code Redline 2.0 in VS Code', function () {
     }
     await exec('git', ['add', '-A'], { cwd: root });
     await exec('git', ['commit', '-qm', 'base'], { cwd: root });
-    extension = vscode.extensions.getExtension<RedlineAPI>('marcin.redline')!;
+    extension = vscode.extensions.getExtension<RedlineAPI>('grabowskmr.redline')!;
     assert.ok(extension);
     api = await extension.activate();
     await api.ready;

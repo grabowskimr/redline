@@ -1,6 +1,6 @@
 {
   "name": "redline",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "Records prompt-boundary Git snapshots for the Code Redline diff viewer. No feedback delivery or conversation access.",
   "author": {
     "name": "marcin"

@@ -4,7 +4,7 @@
     "name": "marcin"
   },
   "metadata": {
-    "description": "The snapshot recorder for Code Redline 2.0."
+    "description": "The snapshot recorder for Code Redline."
   },
   "plugins": [
     {

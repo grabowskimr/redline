@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Code Redline 2.0: immutable snapshots at prompt and completion boundaries.
+/** Code Redline: immutable snapshots at prompt and completion boundaries.
  * This observer never injects context, reads feedback, or controls Claude's turn.
  * All Git staging uses a unique temporary index; the real index is untouched.
  */
@@ -339,7 +339,7 @@ async function markAlive(root) {
   const temp = `${file}.${process.pid}.tmp`;
   await writeFile(
     temp,
-    JSON.stringify({ name: 'redline', version: 4, pluginVersion: '2.0.0', capabilities: ['runSnapshots'], at: new Date().toISOString() }),
+    JSON.stringify({ name: 'redline', version: 4, pluginVersion: '1.0.0', capabilities: ['runSnapshots'], at: new Date().toISOString() }),
     'utf8',
   );
   await rename(temp, file);

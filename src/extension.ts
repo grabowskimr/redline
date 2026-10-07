@@ -20,7 +20,7 @@ export interface RedlineAPI {
   ready: Promise<void>;
 }
 
-/** Code Redline 2.0 is a local diff viewer. It never writes to an agent terminal. */
+/** Code Redline is a local diff viewer. It never writes to an agent terminal. */
 export async function activate(context: vscode.ExtensionContext): Promise<RedlineAPI> {
   const logger = new Logger('Code Redline');
   let disposed = false;
@@ -70,7 +70,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Redlin
       if (files.state.scope !== 'unreviewed' && !(await view.show('unreviewed'))) return;
       return files.nextUnreviewed();
     },
-    'redline.setUpHook': () => setUpHook(context, logger),
+    'redline.setUpHook': () => setUpHook(),
     'redline.showLog': () => logger.show(),
     'redline.focusPanel': () => view.show(),
   };

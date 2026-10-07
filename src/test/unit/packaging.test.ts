@@ -42,7 +42,7 @@ describe('what gets published', () => {
 
   it('ships version 2 with a native view and no conversation commands', () => {
     const raw = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-    assert.equal(raw.version, '2.0.1');
+    assert.equal(raw.version, '1.0.0');
     assert.equal(raw.contributes.views.redline[0].id, 'redline.changes');
     assert.equal(raw.contributes.views.redline[0].type, undefined);
     assert.equal(raw.contributes.keybindings, undefined);
@@ -81,17 +81,11 @@ describe('what gets published', () => {
      * other people's machines is a decision, not a leftover.
      */
     assert.deepEqual(packaged, [
-      '.claude-plugin/marketplace.json',
       'CHANGELOG.md',
       'LICENSE',
       'README.md',
       'dist/extension.js',
       'package.json',
-      'plugin/.claude-plugin/plugin.json',
-      'plugin/hooks/hooks.json',
-      'plugin/hooks/rebase.cjs',
-      'plugin/hooks/redline-touched.mjs',
-      'plugin/hooks/redline-touched.sh',
       'resources/icon.png',
       'resources/icon.svg',
     ]);
@@ -104,15 +98,16 @@ describe('what gets published', () => {
     }
   });
 
-  it('ships the Claude Code plugin, because the setup command installs from here', () => {
-    assert.ok(fs.existsSync(path.join(root, 'plugin/.claude-plugin/plugin.json')));
+  it('keeps the Claude Code marketplace at the repository root, where GitHub installs read it', () => {
+    // `claude plugin marketplace add grabowskimr/redline` reads this file from the default
+    // branch, and the setup command prints exactly that, so the extension ships no copy.
+    const marketplace = JSON.parse(
+      fs.readFileSync(path.join(root, '.claude-plugin/marketplace.json'), 'utf8'),
+    ) as { name: string; plugins: Array<{ name: string; source: string }> };
+    assert.equal(marketplace.name, 'redline');
+    assert.deepEqual(marketplace.plugins.map((p) => [p.name, p.source]), [['redline', './plugin']]);
     assert.ok(fs.existsSync(path.join(root, 'plugin/hooks/hooks.json')));
-    assert.ok(fs.existsSync(path.join(root, '.claude-plugin/marketplace.json')));
-    // And it is genuinely in the package, not merely on disk — `setUpHook` copies it out of
-    // the installed extension, so a package without it leaves the command with nothing to do.
-    for (const f of ['plugin/hooks/redline-touched.mjs', 'plugin/hooks/rebase.cjs', 'plugin/hooks/hooks.json', '.claude-plugin/marketplace.json']) {
-      assert.ok(packaged.includes(f), `the package is missing ${f}`);
-    }
+    assert.ok(!packaged.some((f) => f.startsWith('plugin/') || f.startsWith('.claude-plugin/')));
   });
 
   it('keeps the plugin manifest free of the hooks file Claude Code loads by itself', () => {
