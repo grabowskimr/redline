@@ -1,49 +1,47 @@
-# Code Redline 2.0
+# Code Redline
 
-A lightweight VS Code viewer for changes made while you work with Claude Code in a terminal. Talk to Claude normally; open Code Redline when you want to inspect the result.
+See exactly what Claude Code just changed. Code Redline detects the files Claude Code changes while it works on a prompt in your session and shows them as a native VS Code diff: your code before the prompt on the left, after it on the right.
 
-## Review your changes
+Keep talking to Claude in the terminal as usual. When a prompt finishes, open **Last Run** to see what it changed.
 
-Open **Code Redline: Show Changes** from the Command Palette. The native Changes view offers:
+## How Redline detects Claude Code’s changes
 
-- **Last Run** — the saved before/after diff of your selected session’s latest completed code-changing prompt. Later edits do not change this comparison. A question that changes no files leaves the previous code-changing run visible.
-- **Unreviewed** — current changes since each file’s last acceptance. Files left over from earlier prompts remain here. Accepting a file advances only that file’s baseline; further edits make it reappear.
+Code Redline ships with a small Claude Code companion plugin. Its three hooks mark the boundaries of every prompt:
 
-Use the scope button in the view title to switch between these views. Choose a session with the plug button. Sessions are limited to repositories open in this workspace, including separate Git worktrees.
+- **`UserPromptSubmit`** — when you send a prompt, the recorder snapshots the worktree.
+- **`Stop`** — when Claude finishes, it snapshots the worktree again. The difference between the two snapshots is that prompt’s run.
+- **`StopFailure`** — closes the run when a prompt ends in an error instead of finishing normally.
 
-Click a file to open its saved diff. Use **Open Working File for Editing** in the row or diff editor toolbar to edit the current file. Saved comparisons remain read-only so their meaning cannot change while you review them.
+Snapshots are Git trees built in scratch indexes, so your real index and working tree are never touched. They cover edits, added and deleted files, renames, binaries, executable permissions, and files Claude creates through shell commands. Untracked files that Git ignores are left out.
 
-In Unreviewed, check a file to accept the displayed version, or choose **Mark All Reviewed** from the view menu. Rapid clicks are batched. Acceptance checks that the file has not changed since you saw it; a newer version is left for review. **Next Unreviewed File** opens and selects the next file.
+Runs are recorded per Claude Code session and per worktree, so two sessions never mix. A prompt that only answers a question and changes no files leaves the previous run on screen.
 
-The file tree uses VS Code’s selected file icon theme and native controls. It can be moved to a sidebar using VS Code’s usual view controls.
+Records live under `~/.claude/redline/repo-<hash>/runs.json`. Snapshot and acceptance refs live under `refs/redline/` in the repository, which keeps saved content safe from ordinary Git garbage collection. The extension only watches the run record. It does not read transcripts, poll agent processes, inject prompts, or connect to a terminal.
 
-## Set up the Claude Code recorder
+## Set up
 
-Requires Git, Node.js, a trusted local workspace, and Claude Code with plugin support. No API key or separate API billing is needed: use your existing Claude Code terminal and subscription.
+Requires Git, Node.js, a trusted local workspace, and Claude Code with plugin support. No API key or extra billing: Redline works with your existing Claude Code terminal and subscription.
 
-1. Install this VS Code extension.
-2. Run **Code Redline: Set Up Claude Code Plugin**. It stages the matching bundled recorder at a stable path and opens installation commands, including replacement of an older Redline registration when detected.
-3. Run those commands, restart Claude Code, and resume your session. Remove any old manually configured `redline-touched` hooks to avoid duplicate recorders.
-4. Submit a prompt that changes code, wait for it to finish, and open Last Run.
+1. Install **Code Redline** from the Extensions view (search for “Code Redline”).
+2. Run **Code Redline: Set Up Claude Code Plugin**. It stages the bundled recorder at a stable path and opens the installation commands. If an older Redline registration is detected, the commands replace it.
+3. Run those commands, restart Claude Code, and resume your session. Remove any old manually configured `redline-touched` hooks so the recorder does not run twice.
+4. Send Claude a prompt that changes code, wait for it to finish, and run **Code Redline: Show Changes**.
 
-For development from this repository, register the local marketplace and install/update its companion:
+The extension is version 2.0.1 and its bundled companion is version 2.0.0. After updating the companion, restart Claude: a session that is already running may still hold the old hook configuration.
 
-```sh
-claude plugin marketplace add /absolute/path/to/local-review
-claude plugin install redline@redline
-# If already installed from this local marketplace:
-claude plugin update redline@redline
-```
+## See the last changes
 
-The VS Code extension and companion both use version **2.0.0**. Restart Claude after updating the companion; an already running session may still hold the old hook configuration.
+**Code Redline: Show Changes** opens the Changes view on **Last Run**: the files your session’s latest completed code-changing prompt touched, with added and removed line counts. Click a file to open its saved before/after diff.
 
-## How it works
+The comparison is saved when the prompt finishes, so later edits do not change it. Diffs are read-only for that reason; use **Open Working File for Editing**, in the file row or the diff toolbar, to edit the current file.
 
-Three boundary hooks (`UserPromptSubmit`, `Stop`, `StopFailure`) capture Git trees before and after a prompt. Scratch indexes keep the real index and working tree untouched. This covers tracked edits, added and deleted files, renames, binaries, executable permissions, and files created by shell commands. Git-ignored untracked files follow Git’s ignore rules and are not included.
+Redline shows the most recently active Claude Code session in this repository. To look at another session, including one in a separate Git worktree, choose it with the plug button in the view title; Redline remembers the choice.
 
-Records live under `~/.claude/redline/repo-<hash>/runs.json`, isolated by worktree and session. Snapshot and acceptance refs live under `refs/redline/` in the repository. They preserve saved content across ordinary Git garbage collection. Unreviewed acceptance is shared between VS Code windows for the same worktree and review base.
+The file tree uses your file icon theme and native VS Code controls, and can be moved to a sidebar like any other view.
 
-The extension watches the run record and refreshes the visible view. It does not scan transcripts, poll agent processes, inject prompts, read answers, or connect to a terminal. Opening a listed file uses the already displayed snapshot, without rescanning the working tree.
+### Unreviewed
+
+The scope button in the view title switches to **Unreviewed**: every file changed since you last accepted it, across prompts. Check a file to accept the version shown, or use **Mark All Reviewed** from the view menu. Accepting a file moves only that file’s baseline, and further edits bring it back. Acceptance is refused if the file changed since you saw it, so a newer version always stays up for review. **Next Unreviewed File** opens the next one.
 
 ## Boundaries to know
 
@@ -67,7 +65,7 @@ The extension watches the run record and refreshes the visible view. It does not
 
 2.0 replaces the notes/chat panel with a native diff viewer. Inline comments, editor plus buttons, feedback delivery, Claude replies, chat controls, GitHub comment forwarding, and Everything have been removed. Existing run records and acceptance refs remain readable. Old note/outbox files are left untouched but are never consumed by the 2.0 recorder.
 
-After installing the VSIX, run **Developer: Reload Window** once. Restarting only the extension host can leave the old Notes view registered and cause `redline.changes.focus` to be missing. Version 2.0.1 offers a **Reload Window** action when this happens. This extension fix still uses the 2.0.0 Claude Code companion.
+After upgrading, run **Developer: Reload Window** once. Restarting only the extension host can leave the old Notes view registered and cause `redline.changes.focus` to be missing. Version 2.0.1 offers a **Reload Window** action when this happens. This extension fix still uses the 2.0.0 Claude Code companion.
 
 ## Development
 
@@ -77,6 +75,15 @@ npm test
 npm run lint
 npm run test:integration
 npm run package
+```
+
+To use the companion from a checkout instead of the bundled copy, register the repository as a local Claude Code marketplace:
+
+```sh
+claude plugin marketplace add /absolute/path/to/local-review
+claude plugin install redline@redline
+# If already installed from this local marketplace:
+claude plugin update redline@redline
 ```
 
 Integration tests use an isolated VS Code profile and temporary workspace. They do not contact your live Claude sessions.
