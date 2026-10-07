@@ -178,7 +178,7 @@ describe('working-tree snapshots', () => {
     assert.deepEqual([...binary], ['logo.png'], 'the image, and not the source file beside it');
   });
 
-  it('still produces a tree when a file vanishes while it is being staged', async () => {
+  it('does not publish a partial staging result as an exact snapshot', async () => {
     // `git add --ignore-errors` continues past a file it cannot read but still exits non-zero,
     // which is routine while an agent is moving files around. Abandoning the snapshot there
     // would fail exactly when the tree is changing fastest.
@@ -192,10 +192,32 @@ describe('working-tree snapshots', () => {
       }
       return git(args, env);
     };
-    const tree = await snapshotWorkingTree(repo, flaky);
-    assert.ok(tree, 'a tree was still written');
-    const changes = await treeChanges('HEAD', tree, git);
-    assert.deepEqual([...changes.keys()], ['doomed.ts'], 'with everything that did stage');
+    const warnings: string[] = [];
+    const tree = await snapshotWorkingTree(repo, flaky, (reason) => warnings.push(reason));
+    assert.equal(tree, undefined, 'partial staging cannot establish an exact boundary');
+    assert.equal(warnings.length, 1);
+  });
+
+  it('reports a failed required clean filter instead of capturing stale content', async () => {
+    await write('.gitattributes', 'edited.ts filter=broken\n');
+    await git(['add', '.gitattributes']);
+    await git(['commit', '-qm', 'attributes']);
+    await git(['config', 'filter.broken.clean', 'false']);
+    await git(['config', 'filter.broken.required', 'true']);
+    await write('edited.ts', 'preexisting dirty work\n');
+    const warnings: string[] = [];
+    assert.equal(await snapshotWorkingTree(repo, git, (reason) => warnings.push(reason)), undefined);
+    assert.equal(warnings.length, 1);
+  });
+
+  it('captures assume-unchanged files without changing the real index', async () => {
+    await git(['update-index', '--assume-unchanged', 'edited.ts']);
+    const index = await fs.readFile(path.join(repo, '.git', 'index'));
+    await write('edited.ts', 'dirty before the run\n');
+    const tree = await snapshotWorkingTree(repo, git);
+    assert.ok(tree);
+    assert.equal(await git(['show', `${tree}:edited.ts`]), 'dirty before the run\n');
+    assert.deepEqual(await fs.readFile(path.join(repo, '.git', 'index')), index);
   });
 
   it('runs two snapshots at once without them fighting over a scratch index', async () => {

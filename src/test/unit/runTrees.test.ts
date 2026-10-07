@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { readRunTrees, readStopMarker } from '../../claude/runTrees';
-import { projectSlug } from '../../claude/transcripts';
+import { stateKey } from '../../claude/statePaths';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -16,7 +16,7 @@ describe('run trees recorded by the hook', () => {
   beforeEach(async () => {
     home = await fs.mkdtemp(path.join(os.tmpdir(), 'lr-runtrees-'));
     repo = '/tmp/some/repo';
-    dir = path.join(home, '.claude', 'redline', projectSlug(repo));
+    dir = path.join(home, '.claude', 'redline', stateKey(repo));
     await fs.mkdir(dir, { recursive: true });
   });
 
@@ -118,7 +118,7 @@ describe('the marker a finished run leaves behind', () => {
   beforeEach(async () => {
     home = await fs.mkdtemp(path.join(os.tmpdir(), 'lr-stop-'));
     repo = '/tmp/some/repo';
-    dir = path.join(home, '.claude', 'redline', projectSlug(repo));
+    dir = path.join(home, '.claude', 'redline', stateKey(repo));
     await fs.mkdir(dir, { recursive: true });
   });
 

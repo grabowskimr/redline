@@ -1,35 +1,20 @@
 #!/usr/bin/env node
-/**
- * Redline hook for Claude Code — records which files the agent itself changed.
- *
- * Redline otherwise has to infer this from git ranges and file timestamps, and neither can
- * tell *who* made a change: a file you saved yourself, or one a formatter or a build
- * touched, looks exactly like the agent's work. This records the agent's edits at the
- * source, so "what changed in the last run" stops being a guess.
- *
- * Invoked by `redline-touched.sh`, which is what Claude Code is pointed at — hooks get a
- * minimal PATH and an nvm/Homebrew/Volta node is often not on it. See "Attributing changes
- * exactly" in the Redline README.
- *
- * Contract with Claude Code: reply with JSON and exit 0, always. A hook that fails or stalls
- * interferes with the turn it is attached to, and none of this is worth that. Every failure
- * path is silent.
+/** Code Redline 2.0: immutable snapshots at prompt and completion boundaries.
+ * This observer never injects context, reads feedback, or controls Claude's turn.
+ * All Git staging uses a unique temporary index; the real index is untouched.
  */
-import { appendFile, mkdir, stat, utimes, writeFile, readFile, readdir, unlink, copyFile, rename, rm } from 'node:fs/promises';
+import { mkdir, stat, utimes, writeFile, readFile, copyFile, rename, rm, realpath } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
+import { captureRebaseCursor, adjustForRebases } from './rebase.cjs';
 
 const execFileP = promisify(execFile);
 
-/** The hook's reply. `{}` unless there is something to inject. */
-let reply = {};
-
-/** Same scheme Claude Code uses for transcript directories, so Redline can find ours. */
-const slug = (dir) => dir.replace(/[^A-Za-z0-9-]/g, '-');
-const logDir = (root) => join(homedir(), '.claude', 'redline', slug(root));
+const stateKey = (root) => `repo-${createHash('sha256').update(root).digest('hex')}`;
+const logDir = (root) => join(homedir(), '.claude', 'redline', stateKey(root));
 
 /**
  * The repository root for a working directory.
@@ -52,132 +37,16 @@ async function repoRoot(cwd) {
       cwd,
       timeout: QUICK_TIMEOUT_MS,
     });
-    return stdout.trim() || cwd;
+    return stdout.trim() ? await realpath(stdout.trim()) : undefined;
   } catch {
-    return cwd; // not a repository, git unavailable, or too slow
+    return undefined; // no state is written outside a Git repository
   }
 }
-
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Update']);
 
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString('utf8');
-}
-
-/** Paths from a tool input, covering the single- and multi-file shapes. */
-function pathsFrom(input) {
-  if (!input || typeof input !== 'object') return [];
-  const out = [];
-  if (typeof input.file_path === 'string') out.push(input.file_path);
-  if (typeof input.notebook_path === 'string') out.push(input.notebook_path);
-  if (Array.isArray(input.edits)) {
-    for (const e of input.edits) if (e && typeof e.file_path === 'string') out.push(e.file_path);
-  }
-  return out;
-}
-
-/**
- * Append-only log, so it needs a ceiling: an agent working in one directory for months
- * would otherwise grow it without bound. Redline only ever reads the newest part, so the
- * older half is dropped whole once the file gets large. Trimming happens on a line
- * boundary — a half-line would be unparseable.
- */
-const MAX_LOG_BYTES = 8 * 1024 * 1024;
-const KEEP_LOG_BYTES = 2 * 1024 * 1024;
-
-async function trimLog(logFile) {
-  try {
-    const { size } = await stat(logFile);
-    if (size <= MAX_LOG_BYTES) return;
-    const raw = await readFile(logFile, 'utf8');
-    const cut = raw.length - KEEP_LOG_BYTES;
-    const from = raw.indexOf('\n', cut > 0 ? cut : 0);
-    await writeFile(logFile, from >= 0 ? raw.slice(from + 1) : '', 'utf8');
-  } catch {
-    // nothing to trim, or unreadable
-  }
-}
-
-/** Bash markers are per session; clear ones left behind by sessions that are long gone. */
-const MARKER_TTL_MS = 24 * 60 * 60 * 1000;
-
-async function sweepMarkers(dir) {
-  try {
-    const now = Date.now();
-    for (const name of await readdir(dir)) {
-      if (!name.startsWith('bash-') || !name.endsWith('.start')) continue;
-      const full = join(dir, name);
-      const { mtimeMs } = await stat(full);
-      if (now - mtimeMs > MARKER_TTL_MS) await unlink(full);
-    }
-  } catch {
-    // best effort
-  }
-}
-
-/** Whether a path lies inside the repository this run is being measured against. */
-const insideRepo = (root, file) => file === root || file.startsWith(root.endsWith('/') ? root : `${root}/`);
-
-async function record(root, sessionId, files, via) {
-  const unique = [...new Set(files.filter((f) => typeof f === 'string' && f))];
-  if (unique.length === 0) return;
-  const dir = logDir(root);
-  await mkdir(dir, { recursive: true });
-  const at = new Date().toISOString();
-  const lines = unique.map((f) => JSON.stringify({ at, session: sessionId, file: f, via })).join('\n');
-  const logFile = join(dir, 'touched.jsonl');
-  await appendFile(logFile, lines + '\n', 'utf8');
-  // The first edit inside the repository is what makes this run "the last run" — see
-  // `promoteRun`. Files outside it are logged but must not move the boundary: a turn whose
-  // only writes went to `~/.claude/`, a scratch directory or another repository changed
-  // nothing here, and moving the boundary for it is what made the previous run's work vanish.
-  if (unique.some((f) => insideRepo(root, f))) await promoteRun(dir, sessionId);
-}
-
-const markerFile = (root, sessionId) => join(logDir(root), `bash-${(sessionId || 'x').replace(/[^\w-]/g, '')}.start`);
-
-/**
- * Bash can write files without naming them, so the command is bracketed instead: the start
- * time is noted, then afterwards any tracked file that changed *and* is newer than that is
- * attributed to it. `git diff --name-only` is used rather than `git status`, which walks
- * untracked files and costs about eight times as much in a large repo. Files Bash creates
- * from scratch are therefore not recorded here — Redline counts untracked files as new work
- * on its own.
- */
-async function bashStart(root, sessionId) {
-  await mkdir(logDir(root), { recursive: true });
-  await writeFile(markerFile(root, sessionId), String(Date.now()), 'utf8');
-}
-
-async function bashEnd(root, sessionId) {
-  let start = 0;
-  try {
-    start = Number(await readFile(markerFile(root, sessionId), 'utf8')) || 0;
-  } catch {
-    return; // no matching start; attributing the whole diff would be a lie
-  }
-  // `-z` so a path containing a quote, a backslash or a newline comes back verbatim rather
-  // than escaped — an escaped one fails every stat below and is silently dropped.
-  const { stdout } = await execFileP('git', ['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', 'HEAD'], {
-    cwd: root,
-    maxBuffer: 16 * 1024 * 1024,
-    // Runs after every Bash tool call the agent makes, so it is on the critical path of the
-    // turn. Better to attribute nothing than to hold the agent up.
-    timeout: QUICK_TIMEOUT_MS,
-  });
-  const changed = stdout.split('\0').filter(Boolean);
-  const touched = [];
-  for (const rel of changed) {
-    try {
-      const { mtimeMs } = await stat(join(root, rel));
-      if (mtimeMs >= start) touched.push(join(root, rel));
-    } catch {
-      // deleted by the command; Redline picks deletions up from git anyway
-    }
-  }
-  await record(root, sessionId, touched, 'bash');
 }
 
 /**
@@ -191,8 +60,8 @@ async function bashEnd(root, sessionId) {
  * The user's index and working tree are untouched — `GIT_INDEX_FILE` points the staging at a
  * scratch file in the temp directory. The real index is copied there first: staging 42k files
  * against an empty index costs about 6 seconds, against a copy of the repository's own index
- * under one, because git's stat cache does the work. Objects land in the repository unreachable
- * and are pruned on git's usual schedule, as `git stash create` leaves them.
+ * under one, because git's stat cache does the work. Objects land in the repository. Owned
+ * refs protect retained review trees; evicted, unreferenced objects become eligible for pruning.
  *
  * Runs inline at UserPromptSubmit: it has to finish before the agent's first edit, or the
  * "before" is not before anything. Measured at ~0.9s in a 42k-file monorepo.
@@ -263,20 +132,16 @@ async function snapshotTree(root) {
         await rm(shadow, { force: true }); // no index yet: stage from empty
       }
     }
-    try {
-      await git(['add', '-A', '--ignore-errors', '--'], { GIT_INDEX_FILE: shadow });
-    } catch {
-      /*
-       * `--ignore-errors` still exits non-zero when a file vanishes mid-walk — which is the
-       * normal state of a tree an agent is working in. Everything it did stage is in the
-       * scratch index, so the tree is written anyway; abandoning here means the run has no
-       * "before" at all, and everything it changes is attributed to whatever comes next.
-       *
-       * The extension's copy of this routine has done it this way since the same thing
-       * happened there.
-       */
+    const env = { GIT_INDEX_FILE: shadow };
+    const { stdout: entries } = await git(['ls-files', '-v', '-z'], env);
+    const assumed = entries.split('\0').filter((entry) => /^[a-z] /.test(entry)).map((entry) => entry.slice(2));
+    const stamp = await stat(shadow).catch(() => undefined);
+    for (let i = 0; i < assumed.length; i += 256) {
+      await git(['update-index', '--no-assume-unchanged', '--', ...assumed.slice(i, i + 256)], env);
     }
-    const { stdout } = await git(['write-tree'], { GIT_INDEX_FILE: shadow });
+    if (assumed.length && stamp) await utimes(shadow, stamp.atime, stamp.mtime);
+    await git(['add', '-A', '--'], env);
+    const { stdout } = await git(['write-tree'], env);
     const tree = stdout.trim();
     return /^[0-9a-f]{40,64}$/.test(tree) ? tree : undefined;
   } catch {
@@ -285,14 +150,15 @@ async function snapshotTree(root) {
     // Several megabytes per call, in the temp directory, once per run. Nothing else was ever
     // going to remove them.
     await rm(shadow, { force: true }).catch(() => undefined);
+    await rm(`${shadow}.lock`, { force: true }).catch(() => undefined);
   }
 }
 
 /** Tells one call's scratch index from the next one's inside a single process. */
 let snapshotSeq = 0;
 
-/** Beyond this the snapshot is holding up the turn; the older signals cover the gap. */
-const SNAPSHOT_TIMEOUT_MS = 30_000;
+/** Bound each snapshot operation; capture failures are reported explicitly. */
+const SNAPSHOT_TIMEOUT_MS = 10_000;
 
 /**
  * For the git calls that sit on the critical path of every tool call.
@@ -305,221 +171,175 @@ const QUICK_TIMEOUT_MS = 5_000;
 /** How many finished runs stay reachable. */
 const MAX_RUN_HISTORY = 5;
 
-/** `runs.json` as it stands, or an empty shape. Small, and read on the critical path. */
-async function readRuns(dir) {
-  try {
-    const raw = JSON.parse(await readFile(join(dir, 'runs.json'), 'utf8'));
-    return raw && typeof raw === 'object' ? raw : {};
-  } catch {
-    return {}; // no previous run here, or a half-written file
-  }
+// Every invocation owns one session. Boundary handlers run synchronously under a repository
+// lock, so a detached Stop cannot read the following prompt's pending generation.
+let eventSession = '';
+let eventRoot = '';
+const sessionKey = (session) => createHash('sha256').update(session).digest('hex');
+async function readDatabase(dir) {
+  try { return JSON.parse(await readFile(join(dir, 'runs.json'), 'utf8')); }
+  catch { return {}; }
 }
-
-/**
- * Publish `runs.json`.
- *
- * Renamed into place: Redline could otherwise read a half-written file and see no run at all.
- * That holds for one writer; two need the pid as well, or they tear each other's temp file
- * and the rename publishes the tear. Two Claude sessions submitting a prompt in the same
- * repository at the same moment interleave their JSON into a shared `runs.json.tmp`, and
- * Redline's reader swallows the parse error — both windows then quietly drop to the mtime
- * heuristic with nothing to say why.
- */
+async function readRuns(dir) {
+  const database = await readDatabase(dir);
+  if (database.version >= 3) return database.sessions?.[sessionKey(eventSession)] || {};
+  // Legacy data is usable only when its session matches; it is never assigned to another.
+  return !database.before?.session || database.before.session === eventSession ? database : {};
+}
+async function retainTrees(database) {
+  const prefix = `refs/redline/${stateKey(eventRoot)}/`;
+  const desired = new Map();
+  for (const [key, state] of Object.entries(database.sessions)) {
+    for (const [name, entry] of [['before', state.before], ['pending', state.pending], ['after', state.after], ['current', state.stopped]]) {
+      if (entry?.tree) desired.set(`${prefix}${key}/${name}`, entry.tree);
+      if (entry?.head) desired.set(`${prefix}${key}/${name}-head`, entry.head);
+    }
+    for (const [i, entry] of (state.history || []).entries()) {
+      if (entry.tree) desired.set(`${prefix}${key}/history-${i}-before`, entry.tree);
+      if (entry.after) desired.set(`${prefix}${key}/history-${i}-after`, entry.after);
+      if (entry.head) desired.set(`${prefix}${key}/history-${i}-head`, entry.head);
+    }
+  }
+  const git = (args) => execFileP('git', args, { cwd: eventRoot, timeout: QUICK_TIMEOUT_MS });
+  const existing = new Map((await git(['for-each-ref', '--format=%(refname) %(objectname)', prefix])).stdout.trim().split('\n').filter(Boolean).map((line) => line.split(' ')));
+  const updates = [];
+  for (const [ref, tree] of desired) {
+    if (!/^[a-f0-9]{40,64}$/.test(tree) || /[\s\0]/.test(ref)) throw new Error('Invalid snapshot reference');
+    if (existing.get(ref) !== tree) updates.push(`update ${ref} ${tree}`);
+  }
+  for (const ref of existing.keys()) if (!desired.has(ref)) updates.push(`delete ${ref}`);
+  if (updates.length) await new Promise((done, reject) => {
+    const child = execFile('git', ['update-ref', '--stdin'], { cwd: eventRoot, timeout: QUICK_TIMEOUT_MS }, error => error ? reject(error) : done());
+    child.stdin?.on('error', reject);
+    child.stdin?.end(updates.join('\n') + '\n');
+  });
+}
 async function writeRuns(dir, runs) {
-  const file = join(dir, 'runs.json');
-  const temp = `${file}.${process.pid}.tmp`;
-  // Stamped so Redline can tell a settled run from hook 1, which never wrote `pending` at all.
-  // Both look like "a marker with `before` and no `pending`", and they mean opposite things:
-  // under hook 1 that is a request starting, under hook 2 it is a run that has just ended.
-  await writeFile(temp, JSON.stringify({ ...runs, version: 2 }), 'utf8');
+  const previous = await readDatabase(dir);
+  const sessions = { ...(previous.sessions || {}), [sessionKey(eventSession)]: runs };
+  // Limit dormant sessions as well as each session's history; never evict an active turn.
+  const ordered = Object.entries(sessions).sort((a, b) => Date.parse(b[1].observedAt || 0) - Date.parse(a[1].observedAt || 0));
+  for (const [key, state] of ordered.slice(20)) if (!state.pending) delete sessions[key];
+  const latest = ordered[0]?.[1] || runs;
+  const database = { ...latest, version: 3, root: eventRoot, sessions };
+  await retainTrees(database);
+  const file = join(dir, 'runs.json'), temp = `${file}.${process.pid}.tmp`;
+  await writeFile(temp, JSON.stringify(database), 'utf8');
   await rename(temp, file);
 }
 
-/**
- * Record the tree this request starts from — as a *candidate* boundary, not the boundary.
- *
- * This used to overwrite `before` outright, which made "the last run" mean "the most recent
- * request" rather than "the most recent request that changed anything". Those differ every
- * time you talk to the agent without it editing: asking a question, reading its answer,
- * approving a note, or a turn whose only writes went outside the repository. Each such turn
- * snapshotted the tree as it already stood and made that the boundary, so `before` and `after`
- * became the same tree, the diff was empty, and everything the previous run had done
- * disappeared from the gutter and from *Claude's last run* — with the changes still sitting
- * uncommitted in the working tree.
- *
- * So the boundary is not moved here. It is moved by `promoteRun` at the moment this run first
- * changes something, and a run that never does leaves the previous one's boundary standing.
- * The session is recorded so the two ends of a run can be checked against each other: two
- * sessions working in one repository overwrite each other's marker, and a "before" from a
- * different session than the one that stopped describes a different run.
- */
 async function recordRunStart(root, sessionId) {
+  const dir = logDir(root), runs = await readRuns(dir);
+  const at = new Date().toISOString(), id = randomUUID();
+  const rebaseCursor = await captureRebaseCursor(root);
   const tree = await snapshotTree(root);
-  if (!tree) return;
-  const dir = logDir(root);
-  await mkdir(dir, { recursive: true });
-  const runs = await readRuns(dir);
-  // A pending marker left by a run that never reached `Stop` is simply replaced: whatever it
-  // would have promoted, this snapshot already contains.
-  runs.pending = { at: new Date().toISOString(), tree, session: sessionId || '' };
+  const head = await execFileP('git', ['rev-parse', '--verify', 'HEAD'], { cwd: root, timeout: QUICK_TIMEOUT_MS }).then(r => r.stdout.trim(), () => undefined);
+  const stable = rebaseCursor === await captureRebaseCursor(root);
+  runs.observedAt = at;
+  runs.pending = { id, at, head, tree: stable ? tree : undefined, rebaseCursor, session: sessionId || '' };
+  runs.snapshotError = !stable ? 'Git changed while the run’s start snapshot was captured.' : tree ? undefined : 'The start snapshot could not be captured.';
   await writeRuns(dir, runs);
 }
 
-/**
- * This run has changed something, so it becomes the run Redline shows.
- *
- * Called from the first edit inside the repository, not from `Stop`, so the panel narrows to
- * the new run while the agent is still working — which is what makes a card answer within a
- * second or two of the edit rather than at the end of the turn.
- *
- * Cheap after the first call: the pending marker is left in place and flagged, so every
- * subsequent edit in the same run costs one small read and stops.
- */
 async function promoteRun(dir, sessionId) {
-  const runs = await readRuns(dir);
-  const pending = runs.pending;
-  if (!pending || typeof pending.tree !== 'string' || pending.promoted) return;
-  /*
-   * Only this session's own request. Two sessions in one worktree overwrite each other's
-   * marker, so the pending tree here can be the *other* one's — taken after this run had
-   * already started editing. Promoting to it would make this run's earlier edits part of the
-   * boundary and hide them completely. Leaving the older boundary standing shows them along
-   * with more besides, which is the side to err on.
-   */
-  if (sessionId && pending.session && pending.session !== sessionId) return;
+  const runs = await readRuns(dir), pending = runs.pending;
+  if (!pending?.tree || pending.promoted || pending.session !== sessionId) return;
   const prev = runs.before;
-  if (prev?.tree && prev.tree !== pending.tree) {
-    // The run that owned the old boundary keeps its pair, so it can still be looked at after
-    // this one takes over. Without this, a follow-up puts the previous run permanently out of
-    // reach — the trees are still in the object store, but nothing remembers which they were.
-    let after;
-    try {
-      const stopped = JSON.parse(await readFile(join(dir, 'stopped.json'), 'utf8'));
-      // Only if it belongs to the run that is ending, not to an older one.
-      if (stopped?.tree && Date.parse(stopped.at) >= Date.parse(prev.at)) after = stopped.tree;
-    } catch {
-      // never stopped, or a hook too old to record it
-    }
-    const entry = { ...prev, after };
-    if (!after) {
-      /*
-       * Claude Code does not run the `Stop` hook when you interrupt a turn, so an interrupted
-       * run never records an end and used to be archived with `after: undefined` — which
-       * Redline's reader drops, putting a run whose work was real and reviewable a moment ago
-       * permanently out of reach of *Review a Previous Run*.
-       *
-       * The tree this run starts from is the closest honest end for it. It can also carry
-       * edits made in between, so it is marked rather than passed off as exact.
-       */
-      entry.after = pending.tree;
-      entry.approx = true;
-    }
-    // A handful is enough to answer "what did the run before this one do?"; keeping more
-    // would pin objects in the repository indefinitely for no one.
-    runs.history = [entry, ...(Array.isArray(runs.history) ? runs.history : [])].slice(0, MAX_RUN_HISTORY);
+  if (prev?.tree && prev.id !== pending.id) {
+    const completed = runs.after?.id === prev.id ? runs.after.tree : undefined;
+    const entry = { ...prev, after: completed || pending.tree, approx: !completed || undefined,
+      endedAt: completed ? runs.after.at : undefined, endRebaseCursor: completed ? runs.after.rebaseCursor : undefined };
+    runs.history = [entry, ...(runs.history || [])].slice(0, MAX_RUN_HISTORY);
   }
-  runs.before = { at: pending.at, tree: pending.tree, session: pending.session };
+  runs.before = { id: pending.id, at: pending.at, tree: pending.tree, head: pending.head, session: pending.session, rebaseCursor: pending.rebaseCursor };
+  runs.after = undefined;
   runs.pending = { ...pending, promoted: true };
   await writeRuns(dir, runs);
 }
 
-/**
- * Settle the pending marker now the run is over.
- *
- * Three ways a run ends, and each needs a different answer:
- *
- * - **It changed something, and said so.** Already promoted from `record`; nothing to do
- *   beyond clearing the marker.
- * - **It changed something no tool call named.** A `Bash` command that *creates* a file is
- *   invisible to `bashEnd`, which diffs tracked files only. The end-of-run tree catches it.
- * - **It changed nothing.** A conversation, a question, a turn that only read — or one whose
- *   edits all landed on gitignored files, or were undone before it finished. The boundary
- *   stays where it was, so the previous run's work is still on screen.
- */
-async function settleRun(dir, endTree, sessionId) {
-  const runs = await readRuns(dir);
+async function settleRun(dir, endTree, sessionId, rebaseCursor) {
+  let runs = await readRuns(dir);
   const pending = runs.pending;
-  if (!pending) return;
-  if (!pending.promoted) {
-    if (endTree && endTree !== pending.tree) {
-      await promoteRun(dir, sessionId);
-      const settled = await readRuns(dir);
-      delete settled.pending;
-      await writeRuns(dir, settled);
+  if (!pending || pending.session !== sessionId) return;
+  if (pending.tree && endTree) {
+    try {
+      const adjusted = await adjustForRebases(eventRoot, pending, { at: new Date().toISOString(), rebaseCursor },
+        async (args) => (await execFileP('git', args, { cwd: eventRoot, timeout: QUICK_TIMEOUT_MS })).stdout);
+      pending.tree = adjusted.tree;
+      pending.rebaseCursor = adjusted.rebaseCursor;
+      if (pending.promoted) runs.before = { ...runs.before, tree: adjusted.tree, rebaseCursor: adjusted.rebaseCursor };
+      await writeRuns(dir, runs);
+    } catch (error) {
+      runs.snapshotError = error.message;
+      delete runs.pending;
+      await writeRuns(dir, runs);
       return;
     }
-    delete runs.pending;
-    await writeRuns(dir, runs);
-    return;
   }
-  // Promoted, but the tree never actually moved: the edits went to gitignored files, or were
-  // reverted before the run ended. Put the boundary back where promotion found it, or this
-  // run — which changed nothing — would hide the last run that did.
-  if (endTree && runs.before?.tree === endTree && Array.isArray(runs.history) && runs.history[0]) {
-    const [restored, ...rest] = runs.history;
-    runs.before = { at: restored.at, tree: restored.tree, session: restored.session };
-    runs.history = rest;
+  if (endTree && pending.tree && endTree !== pending.tree && !pending.promoted) {
+    await promoteRun(dir, sessionId);
+    runs = await readRuns(dir);
   }
+  if (endTree && runs.pending?.promoted && runs.before?.tree === endTree && runs.history?.length) {
+    const [restored, ...history] = runs.history;
+    runs.before = { id: restored.id, at: restored.at, tree: restored.tree, head: restored.head, session: restored.session, rebaseCursor: restored.rebaseCursor };
+    runs.after = { id: restored.id, at: restored.endedAt || pending.at, tree: restored.after, session: restored.session, rebaseCursor: restored.endRebaseCursor };
+    runs.history = history;
+  } else if (endTree && runs.pending?.promoted) {
+    runs.after = { id: pending.id, at: new Date().toISOString(), tree: endTree, session: sessionId, rebaseCursor };
+  }
+  if (!endTree) runs.snapshotError = 'The completed snapshot could not be captured.';
   delete runs.pending;
   await writeRuns(dir, runs);
 }
 
-/**
- * The token Redline types to hand over a batch of review feedback.
- *
- * Nothing is pasted into the terminal: Redline writes the feedback beside its other state and
- * types this, and the prompt is answered here with the whole thing injected. A short token
- * survives being typed where several kilobytes of prompt does not — which is what made
- * sending unreliable in the first place.
- *
- * Deliberately free of `@` and `/`, which the agent's input treats specially.
- */
-const DELIVERY_TOKEN = 'redline-review';
+async function resumeStoppedRun(root, sessionId) {
+  const dir = logDir(root), runs = await readRuns(dir), stopped = runs.stopped;
+  if (runs.pending || !stopped?.tree || stopped.session !== sessionId) return;
+  const same = runs.before?.id === stopped.id;
+  runs.pending = { id: stopped.id, at: stopped.startedAt || stopped.at, resumedAt: new Date().toISOString(),
+    tree: same ? runs.before.tree : stopped.tree, head: same ? runs.before.head : stopped.head, session: sessionId,
+    rebaseCursor: same ? runs.before.rebaseCursor : stopped.rebaseCursor,
+    promoted: same || undefined };
+  await writeRuns(dir, runs);
+}
 
-/** Feedback older than this is stale — a batch nobody sent, or an interrupted one. */
-const OUTBOX_TTL_MS = 60 * 60 * 1000;
-
-/** Hand over any pending review feedback, and consume it so it cannot arrive twice. */
-async function takePendingReview(root, prompt) {
-  // Exact match. A substring test would hand over a batch to any prompt that merely mentions
-  // the tool — talking *about* Redline would silently consume a review.
-  if (prompt.trim().toLowerCase() !== DELIVERY_TOKEN) return undefined;
-  const file = join(logDir(root), 'outbox.md');
-  try {
-    const { mtimeMs } = await stat(file);
-    if (Date.now() - mtimeMs > OUTBOX_TTL_MS) {
-      await unlink(file);
-      return undefined;
+async function acquireLock(dir) {
+  await mkdir(dir, { recursive: true });
+  const lock = join(dir, 'lifecycle.lock'), deadline = Date.now() + 20_000;
+  while (true) {
+    try {
+      await mkdir(lock);
+      await writeFile(join(lock, 'owner'), String(process.pid));
+      return () => rm(lock, { recursive: true, force: true });
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      // Recover a crashed writer, but never steal a live writer's lock.
+      try {
+        const pid = Number(await readFile(join(lock, 'owner'), 'utf8'));
+        if (pid > 0) {
+          try { process.kill(pid, 0); }
+          catch (e) { if (e.code === 'ESRCH') { await rm(lock, { recursive: true, force: true }); continue; } }
+        }
+      } catch {
+        // A writer can die between mkdir and publishing its pid. Never steal a new lock.
+        try { if (Date.now() - (await stat(lock)).mtimeMs > 30_000) { await rm(lock, { recursive: true, force: true }); continue; } } catch { /* another writer recovered it */ }
+      }
+      if (Date.now() >= deadline) throw new Error('Timed out waiting for the run boundary');
+      await new Promise((done) => setTimeout(done, 25));
     }
-    const text = await readFile(file, 'utf8');
-    // Renamed rather than deleted: if anything goes wrong between here and the reply, the
-    // review still exists on disk instead of being lost with no way to get it back.
-    await rename(file, join(logDir(root), 'outbox.sent.md'));
-    return text.trim() || undefined;
-  } catch {
-    return undefined; // nothing waiting
   }
 }
 
-/**
- * Tells Redline the hook is installed and live here, so it can choose how to deliver.
- *
- * Renamed into place, like `runs.json` and the outbox. Redline parses this file the moment it
- * needs a delivery token, which can land mid-write: a torn read throws, `deliveryToken`
- * answers "no plugin here", and a batch that could have been handed over is marked
- * clipboard-only instead.
- */
 async function markAlive(root) {
   const dir = logDir(root);
   await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'root.json'), JSON.stringify({ root }), 'utf8');
   const file = join(dir, 'hook.json');
   const temp = `${file}.${process.pid}.tmp`;
   await writeFile(
     temp,
-    // Version 2 defers the run boundary until a run actually changes something, so `before`
-    // is legitimately older than the request Redline is looking at. Redline checks this before
-    // relaxing its own staleness guard, or an old hook's stale snapshot would be trusted.
-    JSON.stringify({ name: 'redline', version: 2, token: DELIVERY_TOKEN, at: new Date().toISOString() }),
+    JSON.stringify({ name: 'redline', version: 4, pluginVersion: '2.0.0', capabilities: ['runSnapshots'], at: new Date().toISOString() }),
     'utf8',
   );
   await rename(temp, file);
@@ -532,72 +352,53 @@ async function markAlive(root) {
  * The tree recorded here is what "the last run" is measured against, together with the one
  * from the start of the run.
  */
-async function runEnded(root, sessionId) {
-  const dir = logDir(root);
-  await mkdir(dir, { recursive: true });
-  // Snapshotted before the marker is written, so that by the time Redline reacts to the marker
-  // the exact result of the run is already on disk and the panel has nothing left to compute.
+async function runEnded(root, sessionId, payload) {
+  // Stop can mean Claude is paused waiting for a background task, not finished.
+  if (payload.hook_event_name === 'Stop' && Array.isArray(payload.background_tasks) && payload.background_tasks.length) return;
+  const dir = logDir(root), runs = await readRuns(dir);
+  const pending = runs.pending;
+  if (payload.redline_run_id && payload.redline_run_id !== pending?.id) return;
+  if (!pending && runs.stopped) return; // duplicate completion
+  const rebaseCursor = await captureRebaseCursor(root);
   const tree = await snapshotTree(root);
-  // Before the stop marker: by the time Redline reacts to the marker, the boundary this run
-  // leaves behind has to be the one it will read. Settling after would publish "a run ended"
-  // while `runs.json` still described the run as pending, and the panel would render once
-  // against the wrong boundary before correcting itself.
-  await settleRun(dir, tree, sessionId);
-  // Renamed into place, like `runs.json` and the outbox. Redline's `HookSignals` fires on the
-  // create event and parses this file straight away, so a plain write is read torn: the parse
-  // fails, the extension takes its "hook too old to record a tree" branch and guesses the
-  // session the run belonged to.
-  const stopped = join(dir, 'stopped.json');
-  const stoppedTemp = `${stopped}.${process.pid}.tmp`;
-  await writeFile(
-    stoppedTemp,
-    JSON.stringify({ at: new Date().toISOString(), session: sessionId, tree }),
-    'utf8',
-  );
-  await rename(stoppedTemp, stopped);
-  await trimLog(join(dir, 'touched.jsonl'));
-  await sweepMarkers(dir);
-  // Earlier versions kept a directory of copied files here to serve as the run's "before".
-  // A tree object does that now, so this is dead weight — and it was measured in tens of
-  // megabytes for a large run.
-  await rm(join(dir, 'snapshot'), { recursive: true, force: true });
+  const stable = rebaseCursor === await captureRebaseCursor(root);
+  await settleRun(dir, stable ? tree : undefined, sessionId, rebaseCursor);
+  const stopped = {
+    id: pending?.id || randomUUID(), head: pending?.head, at: new Date().toISOString(), startedAt: pending?.at,
+    session: sessionId, tree: stable ? tree : undefined, rebaseCursor,
+    error: payload.hook_event_name === 'StopFailure' ? String(payload.error || 'unknown') : undefined,
+  };
+  const settled = await readRuns(dir);
+  settled.stopped = stopped;
+  await writeRuns(dir, settled);
+  const target = join(dir, 'stopped.json'), temp = `${target}.${process.pid}.tmp`;
+  await writeFile(temp, JSON.stringify(stopped), 'utf8');
+  await rename(temp, target);
 }
 
-try {
+async function main() {
   const payload = JSON.parse((await readStdin()) || '{}');
-  const cwd = typeof payload.cwd === 'string' ? payload.cwd : process.cwd();
-  const root = await repoRoot(cwd);
-  const sessionId = typeof payload.session_id === 'string' ? payload.session_id : '';
-  const tool = typeof payload.tool_name === 'string' ? payload.tool_name : '';
-  const event = typeof payload.hook_event_name === 'string' ? payload.hook_event_name : '';
-
-  if (event === 'UserPromptSubmit') {
-    const prompt = typeof payload.prompt === 'string' ? payload.prompt : '';
-    // Marked alive first: even if the snapshot fails, Redline should know the hook is here.
-    await markAlive(root);
-    const pending = await takePendingReview(root, prompt);
-    if (pending) {
-      reply = {
-        hookSpecificOutput: {
-          hookEventName: 'UserPromptSubmit',
-          additionalContext: pending,
-        },
-      };
+  const event = payload.hook_event_name;
+  if (!['UserPromptSubmit', 'Stop', 'StopFailure'].includes(event)) return;
+  const root = await repoRoot(typeof payload.cwd === 'string' ? payload.cwd : process.cwd());
+  if (!root || typeof payload.session_id !== 'string' || !payload.session_id) return;
+  eventSession = payload.session_id;
+  eventRoot = root;
+  const release = await acquireLock(logDir(root));
+  try {
+    if (event === 'UserPromptSubmit') {
+      await markAlive(root);
+      await recordRunStart(root, eventSession);
+    } else {
+      // Another Stop hook can continue the same prompt without a UserPromptSubmit.
+      // Resume only when Claude explicitly identifies a continuation; ordinary
+      // duplicate completion events must not incorporate later working-file edits.
+      if (payload.stop_hook_active === true) await resumeStoppedRun(root, eventSession);
+      await runEnded(root, eventSession, payload);
     }
-    await recordRunStart(root, sessionId);
-  } else if (event === 'Stop') {
-    // Deliberately not SubagentStop: a turn using subagents fires that once per subagent,
-    // and each one would look like the end of the run.
-    //
-    await runEnded(root, sessionId);
-  } else if (tool === 'Bash') {
-    if (event === 'PreToolUse') await bashStart(root, sessionId);
-    else await bashEnd(root, sessionId);
-  } else if (EDIT_TOOLS.has(tool)) {
-    await record(root, sessionId, pathsFrom(payload.tool_input), 'edit');
-  }
-} catch {
-  // Silent by design: see the contract note above.
+  } finally { await release(); }
 }
 
-process.stdout.write(JSON.stringify(reply) + '\n');
+try { await main(); }
+catch (error) { process.stderr.write(`redline-hook: ${error.message || error}\n`); }
+process.stdout.write('{}\n');

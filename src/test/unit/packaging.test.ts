@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 describe('what gets published', () => {
   const root = path.resolve(__dirname, '../../..');
   interface Manifest {
+    version?: string;
     repository?: { url?: string };
     bugs?: { url?: string };
     homepage?: string;
@@ -37,6 +38,15 @@ describe('what gets published', () => {
       .map((l) => l.trim())
       .filter(Boolean)
       .sort();
+  });
+
+  it('ships version 2 with a native view and no conversation commands', () => {
+    const raw = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    assert.equal(raw.version, '2.0.1');
+    assert.equal(raw.contributes.views.redline[0].id, 'redline.changes');
+    assert.equal(raw.contributes.views.redline[0].type, undefined);
+    assert.equal(raw.contributes.keybindings, undefined);
+    for (const command of raw.contributes.commands) assert.doesNotMatch(command.command, /Note|submit|send|ask|reply|Report|GitHub|AllChanges/);
   });
 
   it('points at a repository that exists', () => {
@@ -76,13 +86,10 @@ describe('what gets published', () => {
       'LICENSE',
       'README.md',
       'dist/extension.js',
-      'media/cards.css',
-      'media/cards.js',
-      'media/codicon.css',
-      'media/codicon.ttf',
       'package.json',
       'plugin/.claude-plugin/plugin.json',
       'plugin/hooks/hooks.json',
+      'plugin/hooks/rebase.cjs',
       'plugin/hooks/redline-touched.mjs',
       'plugin/hooks/redline-touched.sh',
       'resources/icon.png',
@@ -103,7 +110,7 @@ describe('what gets published', () => {
     assert.ok(fs.existsSync(path.join(root, '.claude-plugin/marketplace.json')));
     // And it is genuinely in the package, not merely on disk — `setUpHook` copies it out of
     // the installed extension, so a package without it leaves the command with nothing to do.
-    for (const f of ['plugin/hooks/redline-touched.mjs', 'plugin/hooks/hooks.json', '.claude-plugin/marketplace.json']) {
+    for (const f of ['plugin/hooks/redline-touched.mjs', 'plugin/hooks/rebase.cjs', 'plugin/hooks/hooks.json', '.claude-plugin/marketplace.json']) {
       assert.ok(packaged.includes(f), `the package is missing ${f}`);
     }
   });

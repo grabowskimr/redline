@@ -18,6 +18,13 @@ import * as nodePath from 'node:path';
 
 type Listener<T> = (e: T) => unknown;
 
+export class RelativePattern {
+  readonly baseUri: Uri;
+  constructor(base: string | Uri, readonly pattern: string) {
+    this.baseUri = typeof base === 'string' ? Uri.file(base) : base;
+  }
+}
+
 export class EventEmitter<T> {
   private readonly listeners: Array<Listener<T>> = [];
   readonly event = (fn: Listener<T>): { dispose(): void } => {
@@ -81,6 +88,9 @@ export class Uri {
     const at = value.indexOf(':');
     return new Uri(value.slice(0, at), value.slice(at + 1));
   }
+  static from(value: { scheme: string; path?: string; query?: string; fragment?: string }): Uri {
+    return new Uri(value.scheme, value.path ?? '', value.query ?? '', value.fragment ?? '');
+  }
   static joinPath(base: Uri, ...parts: string[]): Uri {
     return new Uri(base.scheme, [base.path.replace(/\/$/, ''), ...parts].join('/'));
   }
@@ -140,6 +150,8 @@ const noop = (): void => undefined;
 const disposable = { dispose: noop };
 
 export const window = {
+  activeColorTheme: { kind: 2 },
+  onDidChangeActiveColorTheme: () => disposable,
   showInformationMessage: (m: string): Promise<undefined> => {
     shown.messages.push(m);
     return Promise.resolve(undefined);
@@ -220,9 +232,8 @@ export const workspace = {
    */
   getConfiguration: (section: string) => ({
     get: <T>(key: string, fallback?: T): T | undefined =>
-      (state.settings[`${section}.${key}`] as T) ??
-      (state.settingDefaults[`${section}.${key}`] as T) ??
-      fallback,
+      state.settings[`${section}.${key}`] !== undefined ? state.settings[`${section}.${key}`] as T :
+        (state.settingDefaults[`${section}.${key}`] as T) ?? fallback,
     inspect: <T>(key: string) => ({
       key: `${section}.${key}`,
       defaultValue: state.settingDefaults[`${section}.${key}`] as T | undefined,
@@ -286,6 +297,8 @@ export const commands = {
   executeCommand: (): Promise<undefined> => Promise.resolve(undefined),
   registerCommand: () => disposable,
 };
+
+export const extensions = { all: [] as unknown[], onDidChange: () => disposable };
 
 export const env = {
   clipboard: {

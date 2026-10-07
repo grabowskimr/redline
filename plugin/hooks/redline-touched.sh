@@ -11,18 +11,9 @@
 payload=$({ command -p cat 2>/dev/null || cat; })
 [ -n "$payload" ] || { printf '{}\n'; exit 0; }
 
-# Two shapes of event:
-#
-#  - UserPromptSubmit runs inline and *answers*: it snapshots the tree before the agent edits
-#    anything, and it is where pending review feedback is injected into the prompt. Its JSON
-#    reply is the point, so it cannot be pre-empted with `{}`.
-#  - Everything else records and gets out of the way: `{}` first, work detached, no time added
-#    to the tool call.
-sync_mode="${REDLINE_HOOK_SYNC-}"
-case "$payload" in
-  *'"hook_event_name":"UserPromptSubmit"'*|*'"hook_event_name": "UserPromptSubmit"'*) sync_mode=1 ;;
-esac
-[ -n "$sync_mode" ] || printf '{}\n'
+# Boundaries and edit promotion are ordered with Claude's tool lifecycle. Detaching Stop
+# lets the next UserPromptSubmit overtake it and destroys that prompt's starting snapshot.
+sync_mode=1
 
 # Only the plugin's own copy. There used to be a fallback to `$HOME/.claude/redline-touched.mjs`,
 # from a manual install route that no longer exists — nothing writes that path any more, so all
@@ -34,6 +25,21 @@ if [ ! -r "$script" ]; then
   exit 0
 fi
 
+# A minimal macOS PATH often selects Apple's Git launcher, which can stop at an
+# Xcode licence prompt. Prefer an installed Homebrew Git in that case. Keep any
+# explicit Git shim/custom executable already supplied by the caller.
+case "$(command -v git 2>/dev/null)" in
+  /usr/bin/git|"")
+    for redline_git_dir in /opt/homebrew/bin /usr/local/bin; do
+      if [ -x "$redline_git_dir/git" ]; then
+        PATH="$redline_git_dir:$PATH"
+        export PATH
+        break
+      fi
+    done
+    ;;
+esac
+
 node=$(command -v node 2>/dev/null)
 if [ -z "$node" ]; then
   for candidate in \
@@ -41,7 +47,9 @@ if [ -z "$node" ]; then
     /usr/local/bin/node \
     /usr/bin/node \
     "${HOME}/.volta/bin/node" \
-    "${HOME}/.nvm/versions/node"/*/bin/node
+    "${HOME}/.nvm/versions/node"/*/bin/node \
+    "${ASDF_DATA_DIR:-${HOME}/.asdf}/installs/nodejs"/*/bin/node \
+    "${MISE_DATA_DIR:-${HOME}/.local/share/mise}/installs/node"/*/bin/node
   do
     if [ -x "$candidate" ]; then
       node="$candidate"
@@ -55,10 +63,5 @@ if [ -z "$node" ]; then
   exit 0
 fi
 
-if [ -n "$sync_mode" ]; then
-  # stdout is the hook's reply and passes straight through.
-  printf '%s' "$payload" | "$node" "$script"
-  exit 0
-fi
-( printf '%s' "$payload" | "$node" "$script" >/dev/null 2>&1 & ) >/dev/null 2>&1
+printf '%s' "$payload" | "$node" "$script"
 exit 0

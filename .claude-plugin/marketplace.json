@@ -1,14 +1,16 @@
 {
   "name": "redline",
-  "owner": { "name": "marcin" },
+  "owner": {
+    "name": "marcin"
+  },
   "metadata": {
-    "description": "The Claude Code side of Redline, the VS Code review extension."
+    "description": "The snapshot recorder for Code Redline 2.0."
   },
   "plugins": [
     {
       "name": "redline",
       "source": "./plugin",
-      "description": "Records which files each run changes, and delivers review feedback from the Redline VS Code extension without pasting it into the terminal."
+      "description": "Records exact prompt-boundary Git snapshots for the Code Redline VS Code viewer."
     }
   ]
 }

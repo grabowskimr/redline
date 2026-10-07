@@ -28,8 +28,8 @@ import { createHash, randomBytes } from 'node:crypto';
  *
  * The user's own index and working tree are never touched: `GIT_INDEX_FILE` points the
  * staging at a scratch file outside the repository. Objects are written into the repository's
- * object store, unreachable — git prunes them on its usual schedule, the same way it handles
- * what `git stash create` leaves behind.
+ * object store. The hook retains reviewed snapshots under refs/redline. Unretained temporary
+ * trees follow Git's normal pruning schedule.
  */
 
 /** git's hash of the empty tree: the "before" for a repository with no commits. */
@@ -134,20 +134,19 @@ export async function snapshotWorkingTree(
         await fs.rm(shadow, { force: true });
       }
     }
-    // `--ignore-errors` so one unreadable file cannot cost the whole snapshot. Gitignore is
-    // respected, which is what keeps this from hashing node_modules.
-    //
-    // It still *exits* non-zero when any path failed, which is documented and easy to hit: a
-    // file the agent is in the middle of moving vanishes between being listed and being read.
-    // Everything else is staged by then, so the failure is noted and the tree is written
-    // anyway — abandoning the snapshot over one transient file would give up exactly when the
-    // tree is changing fastest.
-    try {
-      await run(['add', '-A', '--ignore-errors', '--'], { GIT_INDEX_FILE: shadow });
-    } catch {
-      // Partial staging; `write-tree` below either produces a tree or fails outright.
+    const env = { GIT_INDEX_FILE: shadow };
+    const assumed = nulFields(await run(['ls-files', '-v', '-z'], env))
+      .filter((entry) => /^[a-z] /.test(entry))
+      .map((entry) => entry.slice(2));
+    const stamp = await fs.stat(shadow).catch(() => undefined);
+    for (let i = 0; i < assumed.length; i += 256) {
+      await run(['update-index', '--no-assume-unchanged', '--', ...assumed.slice(i, i + 256)], env);
     }
-    const tree = (await run(['write-tree'], { GIT_INDEX_FILE: shadow })).trim();
+    // Changing flags rewrites the scratch index. Preserve the original racy-clean guard.
+    if (assumed.length && stamp) await fs.utimes(shadow, stamp.atime, stamp.mtime);
+    // A valid index can still contain stale entries after staging fails. Do not publish it.
+    await run(['add', '-A', '--'], env);
+    const tree = (await run(['write-tree'], env)).trim();
     if (/^[0-9a-f]{40,64}$/.test(tree)) return tree;
     onFail?.(`write-tree returned ${JSON.stringify(tree.slice(0, 80))}`);
     return undefined;

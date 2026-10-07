@@ -16,7 +16,15 @@ export function run(): Promise<void> {
   }
   return new Promise((resolve, reject) => {
     try {
-      mocha.run((failures) => (failures > 0 ? reject(new Error(`${failures} tests failed.`)) : resolve()));
+      const runner = mocha.run((failures) => (failures > 0 ? reject(new Error(`${failures} tests failed.`)) : resolve()));
+      const trace = process.env.REDLINE_TEST_TRACE;
+      if (trace) {
+        for (const event of ['hook', 'hook end', 'test', 'pass', 'fail', 'end'] as const) {
+          runner.on(event, (test: Mocha.Runnable | undefined, error?: Error) => {
+            fs.appendFileSync(trace, `${new Date().toISOString()} ${event}: ${test?.fullTitle() ?? ''}${error ? ` — ${error.message}` : ''}\n`);
+          });
+        }
+      }
     } catch (err) {
       reject(err);
     }

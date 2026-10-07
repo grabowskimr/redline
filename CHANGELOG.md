@@ -1,5 +1,130 @@
 # Changelog
 
+## 2.0.1
+
+- Handle the missing Changes view command during a 1.x upgrade with a single **Reload Window** action. VS Code can load the new extension code before replacing the old Notes view registration.
+- Use the same recovery for Show Changes, Last Run, Unreviewed and Next Unreviewed. Reopening the viewer preserves the selected scope.
+- The Claude Code companion remains at 2.0.0; no companion update is needed for this fix.
+
+## 2.0.0
+
+- Rebuilt as Code Redline, a native Last run and Unreviewed diff viewer.
+- Removed notes, chat, terminal delivery, replies, editor plus buttons and Everything.
+- Uses native VS Code file icons, compact folders and acceptance checkboxes.
+- Retains per-file acceptance, bulk acceptance, fast saved-diff opening and Open Working File for Editing.
+- Reduced the companion to three prompt-boundary hooks, preserving session/worktree isolation and rebase normalization.
+- Matching 2.0 recorder bundled with installation instructions for local builds.
+
+
+## 1.11.5 — 2026-09-10
+
+- Open file-list diffs directly from the displayed comparison instead of rebuilding the entire review on every click. Remove the duplicate full refresh from Next unreviewed and reuse snapshot retention across files in the same comparison.
+- Preserve the clicked snapshot when working files change, keep acceptance validation separate, and prevent late click completions from moving the selected row backward. Check repository changes before opening; skip checkboxes still saving during navigation.
+
+## 1.11.4 — 2026-09-10
+
+- Add **Open Working File for Editing** to saved-diff toolbars, editor and tab context menus, and both Files layouts. Open the actual workspace file without rebuilding the review or modifying its saved snapshots.
+- Follow renamed destinations and relocate the selected review lines into the live file, including unsaved edits. Preserve dirty buffers and explain when a deleted file has no editable counterpart.
+
+## 1.11.3 — 2026-09-10
+
+- Exclude incoming changes from `git rebase` and rebase-based pulls such as `git pram` from Last run, including autostash and fast-forward pulls. Preserve Claude edits, commits and preexisting dirty work, including separate hunks in the same file.
+- Keep the previous code-changing run after a rebase-only request. Correct older saved comparisons when the worktree's Git history provides an unambiguous boundary.
+- Capture precise worktree-local reflog boundaries in companion plugin **0.4.2**. Keep completed comparisons stable across later rebases and report incomplete or conflicting normalization as unavailable.
+- Prevent a background snapshot refresh from temporarily replacing an exact Last run with timestamp-based file attribution.
+
+## 1.11.2 — 2026-09-10
+
+- Match Orca terminals using the detected Claude agent identity before titles or previews. This prevents an idle or renamed Claude session from being mapped to an ordinary `npx` or shell terminal in the same worktree.
+- Exclude disconnected, unwritable, orphaned and other-agent terminals. Leave ambiguous matches unreachable instead of choosing by list order; retain unique title matching for older Orca hosts.
+- Keep successful token submissions at **Awaiting receipt**. Previously the plugin handover incorrectly replaced that state with **Ready to deliver**, asking users to paste again after automatic submission.
+- Log the batch, terminal handle, session and transport result for future delivery diagnosis. No automatic retries or resends are introduced.
+
+## 1.11.1 — 2026-09-10
+
+- Add **Mark all reviewed** to the Files toolbar and **Mark All Displayed Files Reviewed** to the Command Palette. In Unreviewed, accept only the displayed versions; newer edits and newly discovered files stay pending.
+- Show checked boxes and a saving indicator immediately. Combine rapid clicks, serialize checkpoint updates, and validate only selected paths instead of taking two full repository snapshots per click.
+- Preserve other windows’ accepted files on a concurrent update, keep failed marks unchecked, and report save errors inline while leaving other rows usable.
+- Preserve Files scroll positions across Notes and scope changes, including temporary loading states.
+- Open file-request links at their captured text, including unsaved contents. Keep conversation-only labels from looking like editor links.
+
+## 1.11.0 — 2026-09-10
+
+- Redesign the panel around two tabs, **Notes** and **Files**, with a docked chat-style composer on both. Preserve saved drafts and migrate the former Ask Claude tab.
+- Keep attached request context independent of the Files filter. Support Last run, Unreviewed, Everything, a pinned open file including unsaved text, or no file attachment, using the existing Claude Code conversation and transport.
+- Add compact file rows with native file-theme icons, useful parent paths, open-note counts, actual additions/deletions and review progress. Preserve folder-tree mode, keyboard navigation and selection highlighting. Label dirty live editors instead of showing stale saved-line counts.
+- Restyle notes as compact conversations with All/Needs you/Closed filters and ordering controls. Preserve approval, follow-ups, screenshots, saved reply diffs and delivery recovery.
+- Keep comparison opening, refresh, GitHub PR discovery/checkout, setup and logs in Review actions. Fix the panel's refresh-command allowlist.
+- Use VS Code theme tokens throughout the new layout, with independent scrolling and narrow-panel controls.
+
+## 1.10.0 — 2026-09-09
+
+- Add **Unreviewed** between Last run and Everything. Files stay queued across runs until accepted; subsequent changes compare with each file’s accepted version.
+- Save acceptance independently for each file, including additions, deletions, renames, binary content, modes and unsaved text. Retain baselines across reloads and isolate them by worktree and review base.
+- Include the exact pending comparison in **Ask Claude**, preserving both snapshots while the request is queued.
+- Keep stale clicks and simultaneous review windows from accepting unseen changes. Continue file navigation after an accepted row disappears.
+- Keep opened comparisons readable after newer acceptances and Git pruning; resolve filesystem aliases when opening saved diffs.
+- Pass scratch-index environment settings through the shared Git adapter, so snapshotting never updates the user's real index.
+
+## 1.9.4 — 2026-09-09
+
+- Use the selected VS Code file icon theme in the Files tab, including image icons, icon fonts, named files/folders, compound extensions, language associations and light/high-contrast variants.
+- Refresh icons when the icon theme, color theme, installed extensions, language associations or theme definition changes. Honor **None** and theme preferences for folder arrows; retain generic icons if a theme is unavailable.
+- Cache theme definitions and load assets from their contributing extensions without opening reviewed files or changing the user's theme settings.
+
+## 1.9.3 — 2026-09-09
+
+- Honor the chosen Claude session across worktrees, even with another session in the current workspace. Require another choice if the destination disappears, and keep replies to older conversations from changing the destination for new requests.
+- Fix a persistent `working…` indicator after idle hook initialization, delayed activity reads, and finishing while the panel is hidden. Ignore outdated reads when another run starts.
+- Show the destination worktree in **Ask Claude**, with a **Change…** action and immediate session refresh. Discard older asynchronous session refreshes.
+- Make the **Last run / Everything** dropdowns use readable text, an explicit border, and hover/focus styling.
+
+## 1.9.2 — 2026-09-09
+
+- Organize the panel into **Notes**, **Files**, and **Ask Claude** tabs; preserve requests and unfinished replies when switching between them.
+- Show changed files in an Explorer-style tree with compact folders, file icons, single-line names, reviewed checkmarks and visible selection. Support arrow keys, Enter to open, and Space to mark reviewed.
+- Highlight and reveal the file opened by **Next unreviewed**, including a previously collapsed folder. Keep progress and selection tied to the actual comparison.
+- Explain the Claude request's scope, intent and destination. Separate **Ask a question** from **Request changes**, show specific send labels, and return to Notes after a successful send.
+- Replace the premature **Read the reply** action with an honest waiting state and **Open Claude**. Label legacy manual recovery **Check for reply**.
+- Use editor theme colors for controls, selection and focus; simplify empty-state guidance and keep filenames readable in narrow panels.
+
+## 1.9.1 — 2026-09-09
+
+- Keep review files, labels and revisions from the same run when hooks publish or sessions change during loading. Bound retries and show a refresh message if the comparison keeps changing.
+- Identify an active run's changing working-tree side correctly in review questions; only completed runs carry an immutable after snapshot.
+- Preserve note, composer and file navigation while the panel is recreated, and restore the current file list when it becomes visible.
+- Preserve typed requests on the clipboard when the selected document closes before submission.
+- Hide the inline **Review this fix** action when its saved comparison belongs to an earlier response round.
+
+## 1.9.0 — 2026-09-09
+
+- Add **Review this fix** beside replies, tied to exact completed run snapshots and retained independently of the current Last run.
+- Add **Ask Claude about Selection**, **Request a Change**, and a multiline **Ask about this review** composer using the existing Claude Code terminal conversation.
+- Add **Next unanswered**, **Next unreviewed**, and content-sensitive per-file reviewed marks. Preserve drafts through refreshes and prevent duplicate sends.
+- Show actionable delivery states with **Open Claude** and **Copy delivery word** recovery actions.
+- Integrate with GitHub Pull Requests discovery, checkout, and comment menus. Forward published comments or draft text to Claude without posting to GitHub; require checkout for change requests from browsed PRs.
+- Keep reply diff links aligned when unsent turns are removed; prevent a new round from inheriting an older bare reply's comparison.
+- Recheck missing repositories and newly created files immediately on an explicit refresh. Preserve file-level GitHub feedback without inventing a line anchor.
+
+## Unreleased — review reliability
+
+- Keep pushed PR commits in Everything, independently of when the Claude session started; make the original side available for historical feedback without relying on the Git extension.
+- Recover unanswered notes from a final reply when the structured report is incomplete. Ignore progress statuses and malformed entries in identified reports.
+- Follow the original conversation across terminal changes; honour explicit session changes and cancellation. Check that the Claude destination still exists before delivery.
+- Split queued follow-ups by conversation and recheck busy state during a flush. Do not expire a running session simply because thirty minutes elapsed.
+- Keep previous-run history scoped to the selected session through working-directory hints. Bring the full source tree back to a clean lint result.
+- Start hook watching reliably on first use and preserve historical feedback in workspaces opened through symlinks.
+
+- Keep completed run contents fixed and use the same comparison for files, hunks and Source Control.
+- Serialize hook boundaries, separate sessions and canonical repository roots, retain snapshots through Git garbage collection, and handle no-op, interrupted, resumed and failed runs explicitly.
+- Report failed or incomplete snapshots as unavailable; honor working edits on assume-unchanged files without modifying the real index.
+- Give every feedback batch its own outbox, receipt and report identity. Reject stale answers, concurrent duplicate sends and mismatched sessions; preserve fast completions and restore pending work after reload.
+- Use raw saved bytes for binary previews and preserve notes attached to historical revisions.
+- Distinguish waiting for Enter, staged delivery and confirmed collection. Use the same send path for single notes and batches.
+- Ignore Gitignored build churn, reuse prepared prompt contents and cache saved blobs. Bound external process waits.
+- Update both the extension and Claude plugin for the version 3 protocol, then restart Claude. Old ambiguous hook histories remain on disk and are not automatically imported.
+
+
 ## 1.8.0 — 2026-09-02
 
 The run boundary moves when work lands, not when you press Enter.

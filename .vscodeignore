@@ -13,10 +13,6 @@
 
 # The extension itself: one bundled file, its stylesheets, its icons.
 !dist/extension.js
-!media/cards.js
-!media/cards.css
-!media/codicon.css
-!media/codicon.ttf
 !resources/icon.png
 !resources/icon.svg
 
@@ -25,4 +21,5 @@
 !plugin/.claude-plugin/plugin.json
 !plugin/hooks/hooks.json
 !plugin/hooks/redline-touched.mjs
+!plugin/hooks/rebase.cjs
 !plugin/hooks/redline-touched.sh
