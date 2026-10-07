@@ -7,7 +7,7 @@ const MARKETPLACE = 'grabowskimr/redline';
  * A prompt the user pastes into Claude Code, which then installs the companion itself. It is the
  * same on every machine: no local paths, and an older Redline registration is replaced in place.
  */
-export const SETUP_PROMPT = `Install the Code Redline recorder plugin for Claude Code by running these shell commands:
+export const SETUP_PROMPT = `Install the Redline recorder plugin for Claude Code by running these shell commands:
 
 1. If \`claude plugin list\` shows \`redline@redline\`, uninstall it with \`claude plugin uninstall redline@redline\`, adding \`--scope\` with the scope it is listed under.
 2. If \`claude plugin marketplace list\` shows a marketplace named \`redline\`, remove it with \`claude plugin marketplace remove redline\`.
@@ -27,7 +27,7 @@ export async function setUpHook(): Promise<void> {
   if (choice === 'Show Prompt') {
     const doc = await vscode.workspace.openTextDocument({
       language: 'markdown',
-      content: `# Set up Code Redline\n\nPaste this into Claude Code:\n\n---\n\n${SETUP_PROMPT}\n`,
+      content: `# Set up Redline\n\nPaste this into Claude Code:\n\n---\n\n${SETUP_PROMPT}\n`,
     });
     await vscode.window.showTextDocument(doc, { preview: false });
   }

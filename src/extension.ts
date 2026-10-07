@@ -20,9 +20,9 @@ export interface RedlineAPI {
   ready: Promise<void>;
 }
 
-/** Code Redline is a local diff viewer. It never writes to an agent terminal. */
+/** Redline is a local diff viewer. It never writes to an agent terminal. */
 export async function activate(context: vscode.ExtensionContext): Promise<RedlineAPI> {
-  const logger = new Logger('Code Redline');
+  const logger = new Logger('Redline');
   let disposed = false;
   context.subscriptions.push({
     dispose: () => {
@@ -91,8 +91,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Redlin
   status.command = 'redline.focusPanel';
   const updateStatus = () => {
     logger.setLevel(vscode.workspace.getConfiguration('redline').get('trace', 'errors'));
-    status.text = `$(diff) Redline${files.state.root ? ` ${files.state.files.length}` : ''}`;
-    status.tooltip = 'Code Redline — open Claude Code changes';
+    const count = files.state.files.length;
+    status.text = files.state.root ? `$(diff) ${count} ${count === 1 ? 'file' : 'files'}` : '$(diff) Redline';
+    status.tooltip = 'Redline — open the changes Claude Code made';
     if (vscode.workspace.getConfiguration('redline').get('showStatusBar', true)) status.show();
     else status.hide();
   };

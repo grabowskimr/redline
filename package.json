@@ -1,6 +1,6 @@
 {
   "name": "redline",
-  "displayName": "Code Redline",
+  "displayName": "Redline",
   "description": "See Claude Code\u2019s last changes and accept unreviewed files in a native VS Code diff viewer.",
   "version": "1.0.0",
   "publisher": "grabowskmr",
@@ -37,7 +37,7 @@
     },
     "virtualWorkspaces": {
       "supported": false,
-      "description": "Code Redline needs a local Git repository."
+      "description": "Redline needs a local Git repository."
     }
   },
   "contributes": {
@@ -45,81 +45,81 @@
       {
         "command": "redline.reviewChanges",
         "title": "Last Run",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(history)"
       },
       {
         "command": "redline.reviewUnreviewed",
         "title": "Unreviewed",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(checklist)"
       },
       {
         "command": "redline.pickSession",
         "title": "Choose Claude Code Session\u2026",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(plug)"
       },
       {
         "command": "redline.refresh",
         "title": "Refresh Changes",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(refresh)"
       },
       {
         "command": "redline.openReviewFile",
         "title": "Open Saved Diff",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(diff)"
       },
       {
         "command": "redline.openWorkingFile",
         "title": "Open Working File for Editing",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(go-to-file)"
       },
       {
         "command": "redline.markAllReviewed",
         "title": "Mark All Reviewed",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(check-all)"
       },
       {
         "command": "redline.markReviewed",
         "title": "Mark Reviewed",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(check)"
       },
       {
         "command": "redline.nextUnreviewed",
         "title": "Next Unreviewed File",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(arrow-down)"
       },
       {
         "command": "redline.setUpHook",
         "title": "Set Up Claude Code Plugin",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(extensions)"
       },
       {
         "command": "redline.showLog",
         "title": "Show Log",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(output)"
       },
       {
         "command": "redline.focusPanel",
         "title": "Show Changes",
-        "category": "Code Redline",
+        "category": "Redline",
         "icon": "$(diff-multiple)"
       }
     ],
     "viewsContainers": {
-      "panel": [
+      "activitybar": [
         {
           "id": "redline",
-          "title": "Code Redline",
+          "title": "Redline",
           "icon": "resources/icon.svg"
         }
       ]
@@ -129,7 +129,7 @@
         {
           "id": "redline.changes",
           "name": "Last run",
-          "contextualTitle": "Code Redline"
+          "contextualTitle": "Redline"
         }
       ]
     },
@@ -226,7 +226,7 @@
       ]
     },
     "configuration": {
-      "title": "Code Redline",
+      "title": "Redline",
       "properties": {
         "redline.reviewBase": {
           "type": "string",
@@ -246,7 +246,7 @@
             "verbose"
           ],
           "default": "errors",
-          "description": "Verbosity of the Code Redline output channel."
+          "description": "Verbosity of the Redline output channel."
         }
       }
     }

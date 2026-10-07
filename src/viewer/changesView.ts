@@ -229,7 +229,7 @@ export class ChangesView implements vscode.TreeDataProvider<ChangeNode>, vscode.
       'The Changes view focus command is unavailable. Reload the VS Code window to reload its view contributions.',
     );
     const action = await vscode.window.showInformationMessage(
-      'VS Code has not loaded Code Redline’s Changes view. Reload this window to finish loading the updated extension.',
+      'VS Code has not loaded Redline’s Changes view. Reload this window to finish loading the updated extension.',
       'Reload Window',
     );
     if (action === 'Reload Window') {

@@ -1,8 +1,13 @@
-# Code Redline
+# Redline
 
-See exactly what Claude Code just changed. Code Redline detects the files Claude Code changes while it works on a prompt in your session and shows them as a native VS Code diff: your code before the prompt on the left, after it on the right.
+See exactly what Claude Code just changed. Redline detects the files Claude Code changes while it works on a prompt in your session and shows them as a native VS Code diff: your code before the prompt on the left, after it on the right.
 
-Keep talking to Claude in the terminal as usual. When a prompt finishes, open **Last Run** to see what it changed.
+Keep talking to Claude in the terminal as usual. Redline gives you two ways to look at what it did:
+
+- **Last Run** — only what Claude’s latest prompt changed.
+- **Unreviewed** — a checklist of every file changed across all prompts, which you tick off as you read them.
+
+![Last Run: the files Claude Code changed in its latest prompt, with one open in a side-by-side diff](images/last-run.png)
 
 ## How Redline detects Claude Code’s changes
 
@@ -24,19 +29,19 @@ You need Git, Node.js, and Claude Code. No API key or extra billing: Redline wor
 
 ### 1. Install the extension
 
-In VS Code, open the Extensions view, search for **Code Redline**, and click **Install**.
+In VS Code, open the Extensions view, search for **Redline**, and click **Install**.
 
 ### 2. Add the recorder to Claude Code
 
 Redline learns what Claude Code changed through a small Claude Code plugin. To add it:
 
-1. Run **Code Redline: Set Up Claude Code Plugin**, from the **⋯** menu of the Code Redline panel or the Command Palette. It copies a setup prompt to your clipboard.
+1. Run **Redline: Set Up Claude Code Plugin**, from the **⋯** menu of the Redline view or the Command Palette. It copies a setup prompt to your clipboard.
 2. Paste it into Claude Code and send it.
 3. Restart Claude Code (`claude --continue` brings back your conversation).
 
 ### 3. Try it
 
-Ask Claude to change some code and wait for it to finish. Then run **Code Redline: Show Changes** from the Command Palette: the files Claude changed are listed, and clicking one opens the diff.
+Ask Claude to change some code and wait for it to finish. Then run **Redline: Show Changes** from the Command Palette: the files Claude changed are listed, and clicking one opens the diff.
 
 ### Updating and removing
 
@@ -44,19 +49,32 @@ To update the recorder, run **Set Up Claude Code Plugin** again, paste the promp
 
 To remove it, run `claude plugin uninstall redline@redline` and `claude plugin marketplace remove redline`.
 
-## See the last changes
+## Two modes
 
-**Code Redline: Show Changes** opens the Changes view on **Last Run**: the files your session’s latest completed code-changing prompt touched, with added and removed line counts. Click a file to open its saved before/after diff.
+Open Redline from its icon in the Activity Bar on the left, or run **Redline: Show Changes**. Switch between the two modes with the button in the view title.
 
-The comparison is saved when the prompt finishes, so later edits do not change it. Diffs are read-only for that reason; use **Open Working File for Editing**, in the file row or the diff toolbar, to edit the current file.
+### Last Run: what the last prompt changed
 
-Redline shows the most recently active Claude Code session in this repository. To look at another session, including one in a separate Git worktree, choose it with the plug button in the view title; Redline remembers the choice.
+Last Run lists the files your session’s latest completed prompt changed, with added and removed line counts. Click a file to open its before/after diff.
 
-The file tree uses your file icon theme and native VS Code controls, and can be moved to a sidebar like any other view.
+The comparison is saved the moment the prompt finishes, so it shows exactly what that prompt did, even if you or Claude edit the files afterwards. A prompt that only answers a question and changes nothing keeps the previous run on screen. The diffs are read-only for that reason; use **Open Working File for Editing**, in the file row or the diff toolbar, to edit the current file.
 
-### Unreviewed
+### Unreviewed: a checklist of everything you have not read
 
-The scope button in the view title switches to **Unreviewed**: every file changed since you last accepted it, across prompts. Check a file to accept the version shown, or use **Mark All Reviewed** from the view menu. Accepting a file moves only that file’s baseline, and further edits bring it back. Acceptance is refused if the file changed since you saw it, so a newer version always stays up for review. **Next Unreviewed File** opens the next one.
+Unreviewed is for following a whole piece of work, not a single prompt. It lists every file that changed since you last looked at it, across all prompts, and each diff shows the file as it is now against the version you last marked as read.
+
+![Unreviewed: a checklist of changed files across prompts; a file ticked earlier is back with only its newest change](images/unreviewed.png)
+
+- **Tick a file** once you have read it. It leaves the list.
+- **If the file changes again**, by Claude or by you, it comes back, and its diff shows only what changed since you ticked it. In the screenshot, `formatStats.ts` was ticked earlier and is back with just the one line Claude changed afterwards.
+- **Mark All Reviewed** in the view’s **⋯** menu ticks everything at once, and **Next Unreviewed File** opens the next one.
+- Ticking is refused if the file changed while you were reading it, so a newer version is never marked as read by accident.
+
+Unreviewed starts from your branch’s merge-base with the default branch (see `redline.reviewBase` below), so it also includes your own edits, not only Claude’s.
+
+### Sessions
+
+Redline shows the most recently active Claude Code session in this repository. To look at another session, including one in a separate Git worktree, choose it with the plug button in the view title; Redline remembers the choice. You can drag the Redline view to the bottom panel or the secondary sidebar like any other view.
 
 ## Boundaries to know
 

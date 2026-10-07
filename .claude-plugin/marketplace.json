@@ -4,13 +4,13 @@
     "name": "marcin"
   },
   "metadata": {
-    "description": "The snapshot recorder for Code Redline."
+    "description": "The snapshot recorder for Redline."
   },
   "plugins": [
     {
       "name": "redline",
       "source": "./plugin",
-      "description": "Records exact prompt-boundary Git snapshots for the Code Redline VS Code viewer."
+      "description": "Records exact prompt-boundary Git snapshots for the Redline VS Code viewer."
     }
   ]
 }

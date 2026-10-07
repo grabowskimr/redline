@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Code Redline: immutable snapshots at prompt and completion boundaries.
+/** Redline: immutable snapshots at prompt and completion boundaries.
  * This observer never injects context, reads feedback, or controls Claude's turn.
  * All Git staging uses a unique temporary index; the real index is untouched.
  */

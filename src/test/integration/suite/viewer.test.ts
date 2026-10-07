@@ -16,7 +16,7 @@ const waitFor = async (test: () => boolean, message: string) => {
   }
 };
 
-describe('Code Redline in VS Code', function () {
+describe('Redline in VS Code', function () {
   this.timeout(30000);
   let api: RedlineAPI, root: string, extension: vscode.Extension<RedlineAPI>;
   const hook = (event: string) =>

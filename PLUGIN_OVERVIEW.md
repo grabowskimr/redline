@@ -1,6 +1,6 @@
-# Code Redline — plugin overview
+# Redline — plugin overview
 
-Code Redline is a local VS Code diff viewer for Claude Code terminal workflows. The user talks to Claude in the terminal and reviews code in the extension.
+Redline is a local VS Code diff viewer for Claude Code terminal workflows. The user talks to Claude in the terminal and reviews code in the extension.
 
 The native Changes tree has two scopes:
 
